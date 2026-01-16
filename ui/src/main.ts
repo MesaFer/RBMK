@@ -66,7 +66,10 @@ class RBMKSimulator {
     private currentTab: '3d' | '2d' | 'graphs' = '3d';
     
     // Real-time simulation properties
-    private simulationTime: number = 12 * 3600; // Start at 12:00:00 (in seconds from midnight)
+    // Start date: April 20, 1986 at 00:00:00 (midnight)
+    // We track total simulation seconds from this starting point
+    private readonly START_DATE = new Date(1986, 3, 20, 0, 0, 0); // April 20, 1986 00:00:00
+    private simulationSeconds: number = 0; // Total seconds since simulation start
     private timeSpeed: number = 1; // Time multiplier (0.1, 0.5, 1, 5, 10, 100, 500, 1000)
     private isPlaying: boolean = false;
     private lastRealTime: number = 0;
@@ -672,8 +675,8 @@ class RBMKSimulator {
         // Clear graph history
         this.graphs?.clearData();
         
-        // Reset simulation time to 12:00:00
-        this.simulationTime = 12 * 3600;
+        // Reset simulation time to 0 (start of April 20, 1986)
+        this.simulationSeconds = 0;
         this.updateTimeDisplay();
         
         // Reset time speed to 1x
@@ -850,23 +853,81 @@ class RBMKSimulator {
     // Real-time simulation methods
     
     /**
+     * Get current simulation date/time as Date object
+     */
+    private getSimulationDate(): Date {
+        const date = new Date(this.START_DATE.getTime());
+        date.setSeconds(date.getSeconds() + Math.floor(this.simulationSeconds));
+        return date;
+    }
+    
+    /**
      * Format simulation time as HH:MM:SS
      */
     private formatSimulationTime(): string {
-        const totalSeconds = Math.floor(this.simulationTime);
-        const hours = Math.floor(totalSeconds / 3600) % 24;
+        const date = this.getSimulationDate();
+        const hours = date.getHours();
+        const minutes = date.getMinutes();
+        const seconds = date.getSeconds();
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    
+    /**
+     * Format simulation date as DD.MM.YYYY
+     */
+    private formatSimulationDate(): string {
+        const date = this.getSimulationDate();
+        const day = date.getDate().toString().padStart(2, '0');
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}.${month}.${year}`;
+    }
+    
+    /**
+     * Format elapsed time in human-readable format (days, hours, minutes, seconds)
+     */
+    private formatElapsedTime(): string {
+        const totalSeconds = Math.floor(this.simulationSeconds);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
         const seconds = totalSeconds % 60;
-        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        
+        const parts: string[] = [];
+        if (days > 0) parts.push(`${days}d`);
+        if (hours > 0 || days > 0) parts.push(`${hours}h`);
+        if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+        parts.push(`${seconds}s`);
+        
+        return parts.join(' ');
     }
     
     /**
      * Update the simulation time display
      */
     private updateTimeDisplay(): void {
+        // Update time display (HH:MM:SS)
         const timeEl = document.getElementById('sim-time-display');
         if (timeEl) {
             timeEl.textContent = this.formatSimulationTime();
+        }
+        
+        // Update date display (DD.MM.YYYY)
+        const dateEl = document.getElementById('sim-date-display');
+        if (dateEl) {
+            dateEl.textContent = this.formatSimulationDate();
+        }
+        
+        // Update elapsed time display
+        const elapsedEl = document.getElementById('sim-elapsed-display');
+        if (elapsedEl) {
+            elapsedEl.textContent = this.formatElapsedTime();
+        }
+        
+        // Update total seconds display
+        const totalSecondsEl = document.getElementById('sim-total-seconds');
+        if (totalSecondsEl) {
+            totalSecondsEl.textContent = `${Math.floor(this.simulationSeconds).toLocaleString()} s`;
         }
     }
     
@@ -954,12 +1015,10 @@ class RBMKSimulator {
         
         // Calculate simulation time advancement (scaled by timeSpeed for display)
         const simTimeDelta = deltaRealTime * this.timeSpeed;
-        this.simulationTime += simTimeDelta;
+        this.simulationSeconds += simTimeDelta;
         
-        // Handle day wrap-around (24 hours = 86400 seconds)
-        if (this.simulationTime >= 86400) {
-            this.simulationTime -= 86400;
-        }
+        // No wrap-around - we track total elapsed time from April 20, 1986
+        // The date/time formatting handles the conversion
         
         // Update time display
         this.updateTimeDisplay();

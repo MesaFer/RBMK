@@ -93,7 +93,10 @@ contains
         void_reactivity = ALPHA_VOID * coolant_void
         
         ! 4. Xenon poisoning (negative)
-        xe_reactivity = -1.0d-18 * xenon_135
+        ! At equilibrium ~100% power, Xe-135 ≈ 1e14 at/cm³ should give ~-3% reactivity
+        ! Using coefficient 1.5e-16 gives: 1e14 * 1.5e-16 = 0.015 = 1.5% per 1e14
+        ! At 2e14 this gives ~3% negative reactivity, which is realistic
+        xe_reactivity = -1.5d-16 * xenon_135
         
         ! 5. Control rod worth (negative when inserted)
         rod_reactivity = -rod_worth
