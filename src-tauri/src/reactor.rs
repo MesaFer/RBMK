@@ -96,11 +96,11 @@ fn create_channels_from_config(config: &LayoutConfig) -> Vec<FuelChannel> {
                 grid_y: cell.grid_y,
                 x,
                 y,
-                fuel_temp: 900.0,      // Initial equilibrium values
-                coolant_temp: 550.0,
+                fuel_temp: 300.0,      // Cold shutdown - room temperature
+                coolant_temp: 300.0,   // Cold shutdown - room temperature
                 coolant_void: 0.0,
-                neutron_flux: 1.0,
-                burnup: 10.0,
+                neutron_flux: 0.0,     // No flux - shutdown
+                burnup: 0.0,           // Fresh fuel
             });
         }
     }
@@ -128,11 +128,11 @@ fn create_fallback_channels() -> Vec<FuelChannel> {
                     grid_y: j as i32,
                     x,
                     y,
-                    fuel_temp: 900.0,
-                    coolant_temp: 550.0,
+                    fuel_temp: 300.0,      // Cold shutdown - room temperature
+                    coolant_temp: 300.0,   // Cold shutdown - room temperature
                     coolant_void: 0.0,
-                    neutron_flux: 1.0,
-                    burnup: 10.0,
+                    neutron_flux: 0.0,     // No flux - shutdown
+                    burnup: 0.0,           // Fresh fuel
                 });
                 id += 1;
             }
@@ -204,8 +204,8 @@ pub struct AutoRegulatorSettings {
 impl Default for AutoRegulatorSettings {
     fn default() -> Self {
         Self {
-            enabled: true,        // AR is enabled by default
-            target_power: 100.0,  // Target 100% power
+            enabled: false,       // AR is disabled at startup (reactor is shutdown)
+            target_power: 100.0,  // Target 100% power (when enabled)
             kp: 0.002,            // Proportional gain (conservative)
             ki: 0.0001,           // Integral gain (slow correction)
             kd: 0.001,            // Derivative gain (damping)
@@ -269,31 +269,28 @@ pub struct ReactorState {
 
 impl Default for ReactorState {
     fn default() -> Self {
-        // Create equilibrium cosine flux distribution
+        // Create flat flux distribution (reactor is shutdown)
         let axial_flux: Vec<f64> = (0..50)
-            .map(|i| {
-                let z = (i as f64 - 25.0) / 25.0; // -1 to 1
-                (1.0 - z * z).max(0.0) // Parabolic approximation
-            })
+            .map(|_| 0.0) // Zero flux - reactor is shutdown
             .collect();
         
         Self {
             time: 0.0,
             dt: 0.1,
-            power_mw: 3200.0,
-            power_percent: 100.0,
-            neutron_population: 1.0,
-            precursors: constants::BETA_EFF / (constants::NEUTRON_LIFETIME * 0.0767), // Equilibrium
-            k_eff: 1.0,
-            reactivity: 0.0,
-            reactivity_dollars: 0.0,
+            power_mw: 0.0,           // Shutdown - no power
+            power_percent: 0.0,      // Shutdown - 0%
+            neutron_population: 1e-6, // Very low neutron source (subcritical)
+            precursors: 0.0,         // No precursors - fresh start
+            k_eff: 0.95,             // Subcritical
+            reactivity: -0.05,       // Negative reactivity (subcritical)
+            reactivity_dollars: -7.7, // About -7.7$ (deeply subcritical)
             period: f64::INFINITY,
-            iodine_135: 1.0e15,  // Equilibrium value
-            xenon_135: 3.0e15,   // Equilibrium value
-            xenon_reactivity: -0.03,
-            avg_fuel_temp: 900.0,      // Equilibrium at 100% power
-            avg_coolant_temp: 550.0,   // Below saturation (558K) - no void at equilibrium
-            avg_graphite_temp: 650.0,  // Equilibrium at 100% power
+            iodine_135: 0.0,         // No iodine - fresh start, no xenon pit
+            xenon_135: 0.0,          // No xenon - fresh start, no xenon pit
+            xenon_reactivity: 0.0,   // No xenon poisoning
+            avg_fuel_temp: 300.0,    // Cold - room temperature
+            avg_coolant_temp: 300.0, // Cold - room temperature
+            avg_graphite_temp: 300.0, // Cold - room temperature
             avg_coolant_void: 0.0,
             scram_active: false,
             scram_time: 0.0,
@@ -302,7 +299,7 @@ impl Default for ReactorState {
             alerts: Vec::new(),
             explosion_occurred: false,
             explosion_time: 0.0,
-            smoothed_reactivity: 0.0,
+            smoothed_reactivity: -0.05,
         }
     }
 }
@@ -325,7 +322,7 @@ impl ReactorSimulator {
     pub fn new() -> Self {
         let mut control_rods = Vec::new();
         
-        // Initialize control rods with realistic startup positions
+        // Initialize control rods with SHUTDOWN positions (all inserted)
         // RBMK-1000 has 211 control rods total:
         // - 24 AZ (emergency) rods
         // - 24 AR/LAR (automatic regulator) rods
@@ -336,13 +333,13 @@ impl ReactorSimulator {
             let radius = constants::CORE_RADIUS_CM * 0.7;
             
             let (rod_type, position) = if i < 24 {
-                (RodType::Emergency, 1.0)   // AZ - fully extracted, ready for SCRAM
+                (RodType::Emergency, 0.0)   // AZ - fully inserted (shutdown)
             } else if i < 48 {
-                (RodType::Automatic, 0.25)  // AR/LAR - 25% extracted
+                (RodType::Automatic, 0.0)   // AR/LAR - fully inserted (shutdown)
             } else if i < 72 {
-                (RodType::Shortened, 0.55)  // USP - 55% extracted
+                (RodType::Shortened, 0.0)   // USP - fully inserted (shutdown)
             } else {
-                (RodType::Manual, 0.50)     // RR - 50% extracted (balanced for criticality)
+                (RodType::Manual, 0.0)      // RR - fully inserted (shutdown)
             };
             
             // Rod worth varies by type - increased for proper reactivity control
@@ -681,19 +678,25 @@ impl ReactorSimulator {
         self.fuel_channels.lock().unwrap().clone()
     }
     
-    /// Reset simulation to initial state
+    /// Reset simulation to initial state (shutdown, cold, no xenon)
     pub fn reset(&self) {
         let mut state = self.state.lock().unwrap();
         *state = ReactorState::default();
         
+        // Reset all control rods to fully inserted (shutdown)
         let mut rods = self.control_rods.lock().unwrap();
         for rod in rods.iter_mut() {
-            rod.position = match rod.rod_type {
-                RodType::Emergency => 1.0,
-                RodType::Automatic => 0.25,
-                RodType::Shortened => 0.55,
-                RodType::Manual => 0.50,  // 50% extracted for balanced criticality
-            };
+            rod.position = 0.0;  // All rods fully inserted for shutdown
+        }
+        
+        // Reset fuel channels to cold state
+        let mut channels = self.fuel_channels.lock().unwrap();
+        for channel in channels.iter_mut() {
+            channel.fuel_temp = 300.0;
+            channel.coolant_temp = 300.0;
+            channel.coolant_void = 0.0;
+            channel.neutron_flux = 0.0;
+            channel.burnup = 0.0;
         }
     }
 }

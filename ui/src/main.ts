@@ -99,16 +99,13 @@ class RBMKSimulator {
                     this.visualization.initializeReactor(this.getMockData());
                 }
                 
-                // Set initial rod positions in 3D visualization to match startup defaults
-                // AZ (Emergency): 100% extracted - ready to drop for safety
-                // RR (Manual): 15% - main control rods for startup
-                // AR/LAR (Automatic): 25% - automatic regulation with headroom
-                // USP (Shortened): 55% - axial flux shaping
-                this.visualization.setRodPosition('RR' as ChannelType, 0.15);
-                this.visualization.setRodPosition('AR' as ChannelType, 0.25);
-                this.visualization.setRodPosition('LAR' as ChannelType, 0.25);
-                this.visualization.setRodPosition('USP' as ChannelType, 0.55);
-                this.visualization.setRodPosition('AZ' as ChannelType, 1.0);
+                // Set initial rod positions in 3D visualization to match SHUTDOWN state
+                // All rods fully inserted (0%) for cold shutdown
+                this.visualization.setRodPosition('RR' as ChannelType, 0.0);
+                this.visualization.setRodPosition('AR' as ChannelType, 0.0);
+                this.visualization.setRodPosition('LAR' as ChannelType, 0.0);
+                this.visualization.setRodPosition('USP' as ChannelType, 0.0);
+                this.visualization.setRodPosition('AZ' as ChannelType, 0.0);
             } catch (e) {
                 console.error('Failed to create 3D visualization:', e);
             }
@@ -692,16 +689,13 @@ class RBMKSimulator {
             this.state = await invoke<ReactorState>('reset_simulation');
             document.getElementById('alerts-list')!.innerHTML = '';
             
-            // Reset control rod sliders to realistic startup positions:
-            // AZ (Emergency): 100% extracted - ready to drop for safety
-            // RR (Manual): 15% - main control rods for startup
-            // AR/LAR (Automatic): 25% - automatic regulation with headroom
-            // USP (Shortened): 55% - axial flux shaping
+            // Reset control rod sliders to SHUTDOWN positions (all inserted = 0%):
+            // All rods fully inserted for cold shutdown state
             const sliderValues = {
-                'manual-rods': 15,
-                'auto-rods': 25,
-                'usp-rods': 55,
-                'az-rods': 100
+                'manual-rods': 0,
+                'auto-rods': 0,
+                'usp-rods': 0,
+                'az-rods': 0
             };
             const labelIds = {
                 'manual-rods': 'manual-rod-pos',
@@ -717,12 +711,12 @@ class RBMKSimulator {
                 if (label) label.textContent = `${value}%`;
             });
             
-            // Reset visualization rod positions
-            this.visualization?.setRodPosition('RR' as ChannelType, 0.15);
-            this.visualization?.setRodPosition('AR' as ChannelType, 0.25);
-            this.visualization?.setRodPosition('LAR' as ChannelType, 0.25);
-            this.visualization?.setRodPosition('USP' as ChannelType, 0.55);
-            this.visualization?.setRodPosition('AZ' as ChannelType, 1.0);
+            // Reset visualization rod positions (all inserted = 0)
+            this.visualization?.setRodPosition('RR' as ChannelType, 0.0);
+            this.visualization?.setRodPosition('AR' as ChannelType, 0.0);
+            this.visualization?.setRodPosition('LAR' as ChannelType, 0.0);
+            this.visualization?.setRodPosition('USP' as ChannelType, 0.0);
+            this.visualization?.setRodPosition('AZ' as ChannelType, 0.0);
             
             this.updateUI();
         } catch (e) {
@@ -1074,6 +1068,17 @@ class RBMKSimulator {
             voidEl.textContent = `${safeFixed(this.state.avg_coolant_void, 1)}%`;
         }
         
+        // Update xenon and iodine
+        const xenonEl = document.getElementById('xenon-value');
+        if (xenonEl && this.state.xenon_135 != null && Number.isFinite(this.state.xenon_135)) {
+            xenonEl.textContent = `${this.state.xenon_135.toExponential(2)} at/cm³`;
+        }
+        
+        const iodineEl = document.getElementById('iodine-value');
+        if (iodineEl && this.state.iodine_135 != null && Number.isFinite(this.state.iodine_135)) {
+            iodineEl.textContent = `${this.state.iodine_135.toExponential(2)} at/cm³`;
+        }
+        
         // Update status indicator for SCRAM
         if (this.state.scram_active) {
             const statusEl = document.getElementById('status-indicator');
@@ -1135,25 +1140,25 @@ class RBMKSimulator {
         return {
             time: 0,
             dt: 0.1,
-            power_mw: 3200,
-            power_percent: 100,
-            neutron_population: 1.0,
-            precursors: 0.0065,
-            k_eff: 1.0,
-            reactivity: 0,
-            reactivity_dollars: 0,
+            power_mw: 0,           // Shutdown - no power
+            power_percent: 0,      // Shutdown - 0%
+            neutron_population: 1e-6, // Very low neutron source
+            precursors: 0,
+            k_eff: 0.95,           // Subcritical
+            reactivity: -0.05,     // Negative reactivity
+            reactivity_dollars: -7.7,
             period: Infinity,
-            iodine_135: 1e15,
-            xenon_135: 3e15,
-            xenon_reactivity: -0.03,
-            avg_fuel_temp: 900,       // Equilibrium at 100% power
-            avg_coolant_temp: 550,    // Below saturation (558K)
-            avg_graphite_temp: 650,   // Equilibrium at 100% power
+            iodine_135: 0,         // No iodine - fresh start
+            xenon_135: 0,          // No xenon - fresh start
+            xenon_reactivity: 0,   // No xenon poisoning
+            avg_fuel_temp: 300,    // Cold - room temperature
+            avg_coolant_temp: 300, // Cold - room temperature
+            avg_graphite_temp: 300, // Cold - room temperature
             avg_coolant_void: 0,
             scram_active: false,
             scram_time: 0,
             auto_regulator: {
-                enabled: true,
+                enabled: false,       // AR disabled at startup
                 target_power: 100.0,
                 kp: 0.002,
                 ki: 0.0001,
@@ -1163,9 +1168,7 @@ class RBMKSimulator {
                 rod_speed: 0.01,
                 deadband: 0.5,
             },
-            axial_flux: Array(50).fill(0).map((_, i) =>
-                Math.cos(Math.PI * (i - 25) / 50) * (i > 5 && i < 45 ? 1 : 0)
-            ),
+            axial_flux: Array(50).fill(0), // Zero flux - shutdown
             alerts: [],
             explosion_occurred: false,
             explosion_time: 0,
@@ -1176,7 +1179,7 @@ class RBMKSimulator {
         const channels: any[] = [];
         const rods: any[] = [];
         
-        // Generate mock fuel channels
+        // Generate mock fuel channels (cold shutdown state)
         for (let i = 0; i < 100; i++) {
             const angle = (i / 100) * Math.PI * 2;
             const radius = 300 + Math.random() * 200;
@@ -1184,26 +1187,16 @@ class RBMKSimulator {
                 id: i,
                 x: Math.cos(angle) * radius,
                 y: Math.sin(angle) * radius,
-                fuel_temp: 800,
-                coolant_temp: 560,
+                fuel_temp: 300,      // Cold - room temperature
+                coolant_temp: 300,   // Cold - room temperature
                 coolant_void: 0,
-                neutron_flux: 0.5 + Math.random() * 0.5,
-                burnup: 10,
+                neutron_flux: 0,     // No flux - shutdown
+                burnup: 0,           // Fresh fuel
             });
         }
         
-        // Generate mock control rods with different types and realistic startup positions
-        // AZ (Emergency): 100% extracted - ready to drop for safety
-        // RR (Manual): 15% - main control rods for startup
-        // AR/LAR (Automatic): 25% - automatic regulation with headroom
-        // USP (Shortened): 55% - axial flux shaping
+        // Generate mock control rods - ALL INSERTED for shutdown
         const rodTypes = ['Emergency', 'Automatic', 'Shortened', 'Manual'];
-        const rodPositions: Record<string, number> = {
-            'Emergency': 1.0,   // AZ - fully extracted
-            'Automatic': 0.25,  // AR/LAR
-            'Shortened': 0.55,  // USP
-            'Manual': 0.15      // RR
-        };
         for (let i = 0; i < 40; i++) {
             const angle = (i / 40) * Math.PI * 2;
             const radius = 350 + (i % 2) * 100;
@@ -1212,7 +1205,7 @@ class RBMKSimulator {
                 id: i,
                 x: Math.cos(angle) * radius,
                 y: Math.sin(angle) * radius,
-                position: rodPositions[rodType],
+                position: 0.0,  // All rods fully inserted for shutdown
                 rod_type: rodType,
                 worth: rodType === 'Emergency' ? 0.005 : 0.001,
             });
@@ -1223,10 +1216,8 @@ class RBMKSimulator {
             core_radius: 593,
             fuel_channels: channels,
             control_rods: rods,
-            axial_flux: Array(50).fill(0).map((_, i) => 
-                Math.cos(Math.PI * (i - 25) / 50) * (i > 5 && i < 45 ? 1 : 0)
-            ),
-            power_distribution: Array(20).fill(Array(20).fill(0.5)),
+            axial_flux: Array(50).fill(0), // Zero flux - shutdown
+            power_distribution: Array(20).fill(Array(20).fill(0)), // Zero power
         };
     }
 }

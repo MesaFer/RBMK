@@ -126,35 +126,65 @@ contains
         real(c_double), intent(out) :: dn_dt, dc_dt, dtemp_dt
         
         real(c_double) :: temp_feedback, effective_rho, power_frac, target_temp
+        real(c_double) :: prompt_term, delayed_term
         
         ! Temperature feedback (Doppler effect)
-        ! ALPHA_FUEL is negative, so:
-        ! - Hot fuel (T > REF) gives negative feedback (good)
-        ! - Cold fuel (T < REF) gives positive feedback (but limited)
+        ! ALPHA_FUEL is negative (-5e-5), so higher temperature = more negative reactivity
+        !
+        ! The Doppler effect provides NEGATIVE feedback when fuel heats up:
+        ! - At operating temperature (~900K), feedback is zero (reference point)
+        ! - Above 900K: negative feedback (stabilizing)
+        ! - Below 900K: the feedback term becomes positive, but this is NOT
+        !   additional reactivity - it just means less Doppler absorption
+        !
+        ! For proper physics: Doppler feedback should only provide NEGATIVE feedback
+        ! relative to the current operating point, not positive feedback from cold fuel
         temp_feedback = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
         
-        ! Limit positive feedback from cold fuel to prevent runaway
+        ! Doppler effect only provides NEGATIVE feedback (stabilizing)
+        ! Cold fuel doesn't add reactivity - it just has less Doppler absorption
+        ! which is already accounted for in the base reactivity
         if (temp_feedback > 0.0d0) then
-            temp_feedback = min(temp_feedback, 0.001d0)
+            temp_feedback = 0.0d0  ! No positive feedback from Doppler
         end if
         
         ! Calculate effective reactivity
-        ! Do NOT add temperature feedback if reactivity is already strongly negative
-        ! This prevents artificial power increase during shutdown
-        if (rho < -0.005d0) then
-            effective_rho = rho  ! Use raw reactivity during shutdown
-        else
-            effective_rho = rho + temp_feedback
-        end if
+        effective_rho = rho + temp_feedback
         
         ! Clamp to physical bounds
         effective_rho = max(min(effective_rho, 0.02d0), -0.15d0)
         
         ! Point kinetics equations
         ! dn/dt = (rho - beta)/Lambda * n + lambda * C
-        ! At negative reactivity, dn/dt should be negative (power decreasing)
-        dn_dt = ((effective_rho - BETA_EFF) / NEUTRON_LIFETIME) * n + LAMBDA_DECAY * c
+        !
+        ! For positive reactivity (rho > 0):
+        ! - If rho > beta (prompt supercritical): very fast growth
+        ! - If rho < beta (delayed supercritical): slower growth via delayed neutrons
+        
+        prompt_term = ((effective_rho - BETA_EFF) / NEUTRON_LIFETIME) * n
+        delayed_term = LAMBDA_DECAY * c
+        
+        ! Standard point kinetics - works for all cases
+        dn_dt = prompt_term + delayed_term
         dc_dt = (BETA_EFF / NEUTRON_LIFETIME) * n - LAMBDA_DECAY * c
+        
+        ! For very low neutron population with positive reactivity,
+        ! ensure minimum growth rate to bootstrap the reactor
+        if (effective_rho > 0.0d0 .and. n < 1.0d-4) then
+            ! Minimum growth rate based on inhour equation
+            ! For delayed supercritical: T ≈ (beta - rho) / (lambda * rho) when rho < beta
+            ! For prompt supercritical: T ≈ Lambda / (rho - beta) when rho > beta
+            if (effective_rho >= BETA_EFF) then
+                ! Prompt supercritical - very fast growth
+                ! dn/dt = (rho - beta)/Lambda * n
+                dn_dt = max(dn_dt, ((effective_rho - BETA_EFF) / NEUTRON_LIFETIME) * n)
+            else
+                ! Delayed supercritical - growth via delayed neutrons
+                ! Approximate period: T ≈ beta / (lambda * rho)
+                ! dn/dt ≈ n / T = n * lambda * rho / beta
+                dn_dt = max(dn_dt, n * LAMBDA_DECAY * effective_rho / BETA_EFF)
+            end if
+        end if
         
         ! Temperature dynamics - fuel temperature follows power
         ! At low power (n << 1), temperature should decrease toward ambient

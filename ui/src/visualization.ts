@@ -95,12 +95,13 @@ export class ReactorVisualization {
     private coreTransparency: number = 0.7;
     
     // Rod positions by type (0 = fully inserted, 1 = fully withdrawn)
+    // Initial state: all rods fully inserted (shutdown state)
     private rodPositions: Map<ChannelType, number> = new Map([
-        ['RR', 0.8],   // Manual rods - 80% withdrawn
-        ['AR', 0.8],   // Automatic rods
-        ['LAR', 0.8],  // Local automatic
-        ['USP', 0.8],  // Shortened absorbers (from below)
-        ['AZ', 0.8],   // Emergency rods
+        ['RR', 0.0],   // Manual rods - fully inserted (shutdown)
+        ['AR', 0.0],   // Automatic rods - fully inserted (shutdown)
+        ['LAR', 0.0],  // Local automatic - fully inserted (shutdown)
+        ['USP', 0.0],  // Shortened absorbers - fully inserted (shutdown)
+        ['AZ', 0.0],   // Emergency rods - fully inserted (shutdown)
     ]);
     
     private canvas: HTMLCanvasElement;
@@ -312,6 +313,9 @@ export class ReactorVisualization {
         
         // Create channels based on core layout
         this.createChannels();
+        
+        // Apply initial rod positions (all inserted for shutdown)
+        this.updateRodPositions();
         
         // Apply initial transparency
         this.setCoreTransparency(this.coreTransparency);

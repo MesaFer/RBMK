@@ -43,13 +43,17 @@ contains
             explosion_severity = explosion_severity + void_excess * temp_excess
         end if
         
-        ! Condition 3: Prompt supercritical condition (only positive reactivity)
-        if (reactivity_dollars > PROMPT_SUPERCRITICAL) then
+        ! Condition 3: Prompt supercritical condition
+        ! Only counts toward explosion if there's actual power to cause damage
+        ! Prompt critical at zero power just means fast startup, not explosion
+        if (reactivity_dollars > PROMPT_SUPERCRITICAL .and. power_percent > 10.0d0) then
             supercritical_excess = min((reactivity_dollars - PROMPT_SUPERCRITICAL) / 2.0d0, 1.0d0)
+            ! Scale by power level - no power = no explosion
+            supercritical_excess = supercritical_excess * min(power_percent / 100.0d0, 1.0d0)
             explosion_severity = explosion_severity + supercritical_excess
         end if
         
-        ! Condition 4: Extreme power excursion (only if reactivity positive)
+        ! Condition 4: Extreme power excursion (only if reactivity positive and power is high)
         if (power_percent > EXTREME_POWER_FACTOR * 100.0d0 .and. reactivity_dollars > 0.0d0) then
             power_excess = min((power_percent - EXTREME_POWER_FACTOR * 100.0d0) / 200.0d0, 1.0d0)
             explosion_severity = explosion_severity + power_excess

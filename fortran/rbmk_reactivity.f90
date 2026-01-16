@@ -73,16 +73,17 @@ contains
         real(c_double) :: target_reactivity, smoothing_tau, smoothing_alpha
         real(c_double) :: max_reactivity_rate, reactivity_change
         
-        ! 1. Fuel temperature feedback (Doppler effect - STRONG negative feedback)
-        ! ALPHA_FUEL is negative (-5e-5), so:
-        ! - Hot fuel (T > REF_FUEL_TEMP=900K): negative feedback (stabilizing)
-        ! - Cold fuel (T < REF_FUEL_TEMP): positive feedback (but must be limited!)
+        ! 1. Fuel temperature feedback (Doppler effect - NEGATIVE feedback only)
+        ! ALPHA_FUEL is negative (-5e-5), so higher temperature = more negative reactivity
+        !
+        ! Doppler effect provides stabilizing NEGATIVE feedback when fuel heats up.
+        ! Cold fuel doesn't add positive reactivity - it just has less Doppler absorption.
         fuel_temp_reactivity = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
         
-        ! Strictly limit positive feedback from cold fuel
-        ! This prevents unrealistic power increase during low-power operation
+        ! Doppler effect only provides NEGATIVE feedback
+        ! Cold fuel (T < REF) doesn't add positive reactivity
         if (fuel_temp_reactivity > 0.0d0) then
-            fuel_temp_reactivity = min(fuel_temp_reactivity, 0.001d0)
+            fuel_temp_reactivity = 0.0d0
         end if
         
         ! 2. Graphite temperature coefficient (POSITIVE in RBMK!)
@@ -102,11 +103,11 @@ contains
                           + void_reactivity + xe_reactivity + rod_reactivity
         
         ! Apply exponential smoothing to reactivity changes for numerical stability
-        ! Use longer time constant for manual rod movements to simulate mechanical inertia
+        ! Use shorter time constant for faster response to operator actions
         if (scram_active == 1) then
             smoothing_tau = 0.05d0  ! Fast response during SCRAM (gravity drop)
         else
-            smoothing_tau = 1.5d0   ! Slower response for normal operation (mechanical drive)
+            smoothing_tau = 0.5d0   ! Faster response for better simulation interactivity
         end if
         smoothing_alpha = min(dt / smoothing_tau, 1.0d0)
         
@@ -116,11 +117,12 @@ contains
         ! Rate limiting: Maximum reactivity change rate
         ! RBMK control rod drive speed is ~0.4 m/min = 0.67 cm/s
         ! For 7m (700cm) travel, full extraction takes ~17 minutes
-        ! This translates to ~0.001 dk/k per second for typical rod worth
+        ! However, for simulation purposes we allow faster changes
+        ! to make the reactor more responsive to operator actions
         if (scram_active == 1) then
             max_reactivity_rate = 0.05d0  ! Fast insertion during SCRAM [dk/k per second]
         else
-            max_reactivity_rate = 0.0015d0  ! Normal rod movement rate [dk/k per second]
+            max_reactivity_rate = 0.01d0  ! Faster rate for better simulation response [dk/k per second]
         end if
         
         ! Apply rate limiting

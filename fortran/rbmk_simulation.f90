@@ -107,7 +107,14 @@ contains
             fuel_temp_new, coolant_temp_new, graphite_temp_new, coolant_void_new)
         
         ! Step 6: Update xenon dynamics
-        avg_flux = neutron_population_new * 1.0d14
+        ! Flux should be proportional to actual power, not just neutron population
+        ! At zero power, there should be no fission and no xenon/iodine production
+        ! Only use flux if power is above minimum threshold (0.1% = 3.2 MW)
+        if (power_percent > 0.1d0) then
+            avg_flux = neutron_population_new * 1.0d14
+        else
+            avg_flux = 0.0d0  ! No significant fission at very low power
+        end if
         call calculate_xenon_dynamics( &
             iodine_135, xenon_135, avg_flux, dt, &
             iodine_new, xenon_new)

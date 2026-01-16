@@ -28,13 +28,18 @@ contains
         real(c_double), intent(out) :: graphite_temp_new     ! New graphite temperature [K]
         real(c_double), intent(out) :: coolant_void_new      ! New void fraction [%]
         
-        real(c_double) :: power_fraction, target_coolant_temp, target_graphite_temp
-        real(c_double) :: coolant_alpha, graphite_alpha, void_alpha
+        real(c_double) :: power_fraction, target_coolant_temp, target_graphite_temp, target_fuel_temp
+        real(c_double) :: coolant_alpha, graphite_alpha, void_alpha, fuel_alpha
         real(c_double) :: excess_temp, target_void
         
         power_fraction = max(min(power_percent / 100.0d0, 10.0d0), 0.0d0)
+        
+        ! Target temperatures based on power level
+        ! At 100% power: coolant ~550K, graphite ~650K, fuel ~900K
+        ! At higher power, temperatures increase proportionally
         target_coolant_temp = 400.0d0 + 150.0d0 * power_fraction
         target_graphite_temp = 400.0d0 + 250.0d0 * power_fraction
+        target_fuel_temp = 400.0d0 + 500.0d0 * power_fraction
         
         ! Coolant temperature update (fast response)
         coolant_alpha = min(dt / COOLANT_TIME_CONST, 1.0d0)
@@ -44,12 +49,20 @@ contains
         graphite_alpha = min(dt / GRAPHITE_TIME_CONST, 1.0d0)
         graphite_temp_new = graphite_temp + graphite_alpha * (target_graphite_temp - graphite_temp)
         
+        ! Fuel temperature update - FAST response at high power (critical for safety!)
+        ! At high power excursions, fuel heats up very quickly
+        if (power_fraction > 1.0d0) then
+            ! Fast heating during power excursion
+            fuel_alpha = min(dt / 0.5d0, 1.0d0)  ! 0.5s time constant at high power
+        else
+            fuel_alpha = min(dt / 5.0d0, 1.0d0)  ! 5s time constant at normal power
+        end if
+        fuel_temp_new = fuel_temp + fuel_alpha * (target_fuel_temp - fuel_temp)
+        
         ! Clamp temperatures
         coolant_temp_new = max(min(coolant_temp_new, 1000.0d0), 300.0d0)
         graphite_temp_new = max(min(graphite_temp_new, 1500.0d0), 300.0d0)
-        
-        ! Fuel temperature is passed through (calculated in kinetics)
-        fuel_temp_new = max(min(fuel_temp, 3000.0d0), 300.0d0)
+        fuel_temp_new = max(min(fuel_temp_new, 3000.0d0), 300.0d0)
         
         ! Update void fraction (boiling model)
         void_alpha = min(dt / VOID_TIME_CONST, 1.0d0)
