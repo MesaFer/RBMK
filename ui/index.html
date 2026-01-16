@@ -352,6 +352,63 @@
             color: white;
         }
         
+        /* 2D Projection styles */
+        #projection-2d-container {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            background: #0a0a15;
+        }
+        
+        #projection-2d-container.active {
+            display: flex;
+        }
+        
+        #projection-2d-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 15px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        
+        #projection-2d-canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #projection2dCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        .viz-mode-btn {
+            padding: 6px 12px;
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        
+        .viz-mode-btn:hover {
+            background: #1a4a7a;
+            color: white;
+        }
+        
+        .viz-mode-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: white;
+        }
+        
         #view-controls {
             position: absolute;
             top: 10px;
@@ -631,6 +688,7 @@
             <!-- Main Tabs -->
             <div id="main-tabs">
                 <button class="main-tab active" data-tab="3d">🔬 3D Model</button>
+                <button class="main-tab" data-tab="2d">📐 2D Projection</button>
                 <button class="main-tab" data-tab="graphs">📊 Graphs</button>
             </div>
             
@@ -679,6 +737,21 @@
                             <span>USP (24) - Shortened Absorbers</span>
                         </div>
                     </div>
+                </div>
+            </div>
+            
+            <!-- 2D Projection Container -->
+            <div id="projection-2d-container">
+                <div id="projection-2d-toolbar">
+                    <span class="toolbar-label">Visualization Mode:</span>
+                    <button class="viz-mode-btn active" data-mode="channel_type">Channel Types</button>
+                    <button class="viz-mode-btn" data-mode="power">Power</button>
+                    <button class="viz-mode-btn" data-mode="fuel_temp">Fuel Temp</button>
+                    <button class="viz-mode-btn" data-mode="coolant_temp">Coolant Temp</button>
+                    <button class="viz-mode-btn" data-mode="void_fraction">Void Fraction</button>
+                </div>
+                <div id="projection-2d-canvas-container">
+                    <canvas id="projection2dCanvas"></canvas>
                 </div>
             </div>
             

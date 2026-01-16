@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ReactorVisualization, Reactor3DData, ControlRod } from './visualization';
 import { ChannelType } from './rbmk_core_layout';
 import { ReactorGraphs } from './graphs';
+import { Reactor2DProjection, Visualization2DMode } from './reactor_2d';
 
 // Auto regulator settings interface
 interface AutoRegulatorSettings {
@@ -58,10 +59,11 @@ interface SimulationResponse {
 class RBMKSimulator {
     private visualization: ReactorVisualization | null = null;
     private graphs: ReactorGraphs | null = null;
+    private projection2D: Reactor2DProjection | null = null;
     private state: ReactorState | null = null;
     
     // Current view tab
-    private currentTab: '3d' | 'graphs' = '3d';
+    private currentTab: '3d' | '2d' | 'graphs' = '3d';
     
     // Real-time simulation properties
     private simulationTime: number = 12 * 3600; // Start at 12:00:00 (in seconds from midnight)
@@ -112,6 +114,12 @@ class RBMKSimulator {
         this.graphs = new ReactorGraphs();
         this.graphs.initialize();
         
+        // Initialize 2D projection
+        const projection2DCanvas = document.getElementById('projection2dCanvas') as HTMLCanvasElement;
+        if (projection2DCanvas) {
+            this.projection2D = new Reactor2DProjection(projection2DCanvas);
+        }
+        
         // Get initial state
         await this.updateState();
         
@@ -126,8 +134,18 @@ class RBMKSimulator {
         // Main tab switching
         document.querySelectorAll('.main-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
-                const tabId = (e.target as HTMLElement).dataset.tab as '3d' | 'graphs';
+                const tabId = (e.target as HTMLElement).dataset.tab as '3d' | '2d' | 'graphs';
                 this.switchTab(tabId);
+            });
+        });
+        
+        // 2D visualization mode buttons
+        document.querySelectorAll('.viz-mode-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const mode = (e.target as HTMLElement).dataset.mode as Visualization2DMode;
+                document.querySelectorAll('.viz-mode-btn').forEach(b => b.classList.remove('active'));
+                (e.target as HTMLElement).classList.add('active');
+                this.projection2D?.setMode(mode);
             });
         });
         
@@ -358,6 +376,9 @@ class RBMKSimulator {
         // Update 3D visualization
         this.update3D();
         
+        // Update 2D projection
+        this.update2DProjection();
+        
         // Update graphs
         this.updateGraphs();
         
@@ -455,6 +476,21 @@ class RBMKSimulator {
         ctx.font = '10px sans-serif';
         ctx.fillText('Top', 5, 15);
         ctx.fillText('Bottom', 5, height - 5);
+    }
+    
+    /**
+     * Update 2D projection with current reactor state
+     */
+    private update2DProjection(): void {
+        if (!this.projection2D || !this.state) return;
+        
+        this.projection2D.updateData({
+            power_percent: this.state.power_percent,
+            avg_fuel_temp: this.state.avg_fuel_temp,
+            avg_coolant_temp: this.state.avg_coolant_temp,
+            avg_graphite_temp: this.state.avg_graphite_temp,
+            avg_coolant_void: this.state.avg_coolant_void,
+        });
     }
     
     /**
@@ -762,9 +798,9 @@ class RBMKSimulator {
     }
     
     /**
-     * Switch between 3D view and Graphs view
+     * Switch between 3D view, 2D projection, and Graphs view
      */
-    private switchTab(tabId: '3d' | 'graphs'): void {
+    private switchTab(tabId: '3d' | '2d' | 'graphs'): void {
         this.currentTab = tabId;
         
         // Update tab buttons
@@ -777,13 +813,21 @@ class RBMKSimulator {
         
         // Show/hide containers
         const view3dContainer = document.getElementById('view-3d-container');
+        const projection2dContainer = document.getElementById('projection-2d-container');
         const graphsContainer = document.getElementById('graphs-container');
+        
+        // Hide all containers first
+        view3dContainer?.classList.add('hidden');
+        projection2dContainer?.classList.remove('active');
+        graphsContainer?.classList.remove('active');
         
         if (tabId === '3d') {
             view3dContainer?.classList.remove('hidden');
-            graphsContainer?.classList.remove('active');
+        } else if (tabId === '2d') {
+            projection2dContainer?.classList.add('active');
+            // Trigger resize to ensure canvas is properly sized
+            this.projection2D?.render();
         } else {
-            view3dContainer?.classList.add('hidden');
             graphsContainer?.classList.add('active');
             // Redraw graphs when switching to graphs tab
             this.graphs?.drawAllGraphs();
@@ -1029,6 +1073,9 @@ class RBMKSimulator {
         
         // Throttled 3D update
         this.update3D();
+        
+        // Update 2D projection
+        this.update2DProjection();
         
         // Update graphs
         this.updateGraphs();
