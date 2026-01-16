@@ -111,9 +111,9 @@ impl Default for ReactorState {
             iodine_135: 1.0e15,  // Equilibrium value
             xenon_135: 3.0e15,   // Equilibrium value
             xenon_reactivity: -0.03,
-            avg_fuel_temp: 800.0,
-            avg_coolant_temp: 560.0,
-            avg_graphite_temp: 600.0,
+            avg_fuel_temp: 900.0,      // Equilibrium at 100% power
+            avg_coolant_temp: 550.0,   // Below saturation (558K) - no void at equilibrium
+            avg_graphite_temp: 650.0,  // Equilibrium at 100% power
             avg_coolant_void: 0.0,
             scram_active: false,
             scram_time: 0.0,
@@ -143,24 +143,33 @@ impl ReactorSimulator {
     pub fn new() -> Self {
         let mut control_rods = Vec::new();
         
-        // Initialize control rods
-        // Total rod worth when fully inserted should be ~10% (0.1 Δk/k)
-        // With 211 rods, each rod worth = 0.1 / 211 ≈ 0.000474
-        // At 80% withdrawn (20% inserted): 211 * 0.000474 * 0.2 = 0.02
-        // This should balance base_reactivity of 0.02
+        // Initialize control rods with realistic startup positions:
+        // AZ (Emergency): 100% extracted - ready to drop for safety
+        // RR (Manual): 15% - main control rods for startup, mostly inserted
+        // AR/LAR (Automatic): 25% - automatic regulation with headroom
+        // USP (Shortened): 55% - axial flux shaping, partially inserted
+        //
+        // Rod distribution: 24 Emergency, 24 Automatic, 24 Shortened, 139 Manual
         for i in 0..constants::NUM_CONTROL_RODS {
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (constants::NUM_CONTROL_RODS as f64);
             let radius = constants::CORE_RADIUS_CM * 0.7;
+            
+            let (rod_type, position) = if i < 24 {
+                (RodType::Emergency, 1.0)   // AZ - fully extracted, ready for SCRAM
+            } else if i < 48 {
+                (RodType::Automatic, 0.25)  // AR/LAR - 25% extracted
+            } else if i < 72 {
+                (RodType::Shortened, 0.55)  // USP - 55% extracted
+            } else {
+                (RodType::Manual, 0.15)     // RR - 15% extracted (mostly inserted)
+            };
             
             control_rods.push(ControlRod {
                 id: i,
                 x: radius * angle.cos(),
                 y: radius * angle.sin(),
-                position: 0.8, // Mostly withdrawn (80%)
-                rod_type: if i < 24 { RodType::Emergency }
-                         else if i < 48 { RodType::Automatic }
-                         else if i < 72 { RodType::Shortened }
-                         else { RodType::Manual },
+                position,
+                rod_type,
                 worth: 0.0005, // Individual rod worth ~0.05% each, total ~10.5%
             });
         }
@@ -182,8 +191,8 @@ impl ReactorSimulator {
                         id,
                         x,
                         y,
-                        fuel_temp: 800.0,
-                        coolant_temp: 560.0,
+                        fuel_temp: 900.0,      // Equilibrium at 100% power
+                        coolant_temp: 550.0,   // Below saturation (558K)
                         coolant_void: 0.0,
                         neutron_flux: 1.0,
                         burnup: 10.0,
@@ -234,17 +243,22 @@ impl ReactorSimulator {
         };
         
         // Calculate reactivity from various sources
-        // At equilibrium (80% withdrawn, 100% power, 800K fuel temp), total reactivity should be ~0
+        // At equilibrium with startup rod positions, total reactivity should be ~0
         
         // 1. Base excess reactivity (reactor is supercritical without rods)
-        // Total rod worth at 80% withdrawn = 211 rods * 0.0005 * 0.2 = 0.0211
-        // Plus small xenon contribution ~0.000001
-        // So base reactivity = 0.0211 to balance exactly
-        let base_reactivity = 0.0211;
+        // Rod positions at startup:
+        // - Emergency (24 rods): 100% extracted = 0% insertion
+        // - Automatic (24 rods): 25% extracted = 75% insertion
+        // - Shortened (24 rods): 55% extracted = 45% insertion
+        // - Manual (139 rods): 15% extracted = 85% insertion
+        // Total rod worth inserted = 24*0.0005*0 + 24*0.0005*0.75 + 24*0.0005*0.45 + 139*0.0005*0.85
+        //                          = 0 + 0.009 + 0.0054 + 0.059075 = 0.073575
+        // So base reactivity should balance this
+        let base_reactivity = 0.0736;
         
         // 2. Temperature feedback (Doppler effect - negative)
-        // At reference temp (800K), this is zero
-        let ref_fuel_temp = 800.0;
+        // At reference temp (900K at 100% power), this is zero
+        let ref_fuel_temp = 900.0;
         let alpha_fuel = -3.0e-5; // Fuel temperature coefficient [1/K]
         let temp_reactivity = alpha_fuel * (state.avg_fuel_temp - ref_fuel_temp);
         
@@ -257,7 +271,7 @@ impl ReactorSimulator {
         let xe_reactivity = -1.0e-7 * (state.xenon_135 / 3.0e15); // Nearly zero at equilibrium
         
         // 5. Control rod worth (negative when inserted)
-        // At 80% withdrawn (20% inserted): 211 * 0.0005 * 0.2 = 0.0211
+        // With startup positions, total insertion provides ~0.0736 worth
         let rod_reactivity = -total_rod_worth;
         
         // Total reactivity
@@ -302,9 +316,11 @@ impl ReactorSimulator {
         // Update temperatures based on power (simplified thermal model)
         // Temperatures respond slowly to power changes
         let thermal_time_constant = 5.0; // seconds
-        let target_fuel_temp = 500.0 + 400.0 * (state.power_percent / 100.0);
-        let target_coolant_temp = 500.0 + 80.0 * (state.power_percent / 100.0);
-        let target_graphite_temp = 500.0 + 150.0 * (state.power_percent / 100.0);
+        // Target temperatures at 100% power: fuel=900K, coolant=550K, graphite=650K
+        // At 0% power: fuel=400K, coolant=400K, graphite=400K (cold shutdown)
+        let target_fuel_temp = 400.0 + 500.0 * (state.power_percent / 100.0);
+        let target_coolant_temp = 400.0 + 150.0 * (state.power_percent / 100.0);  // Max 550K at 100%
+        let target_graphite_temp = 400.0 + 250.0 * (state.power_percent / 100.0);
         
         let alpha = state.dt / thermal_time_constant;
         state.avg_fuel_temp += alpha * (target_fuel_temp - state.avg_fuel_temp);
@@ -430,7 +446,13 @@ impl ReactorSimulator {
         
         let mut rods = self.control_rods.lock().unwrap();
         for rod in rods.iter_mut() {
-            rod.position = 0.8; // Reset to 80% withdrawn
+            // Reset to realistic startup positions
+            rod.position = match rod.rod_type {
+                RodType::Emergency => 1.0,   // AZ - fully extracted, ready for SCRAM
+                RodType::Automatic => 0.25,  // AR/LAR - 25% extracted
+                RodType::Shortened => 0.55,  // USP - 55% extracted
+                RodType::Manual => 0.15,     // RR - 15% extracted (mostly inserted)
+            };
         }
     }
 }

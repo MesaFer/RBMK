@@ -40,8 +40,13 @@ interface SimulationResponse {
 class RBMKSimulator {
     private visualization: ReactorVisualization | null = null;
     private state: ReactorState | null = null;
-    private running: boolean = false;
-    private animationId: number | null = null;
+    
+    // Real-time simulation properties
+    private simulationTime: number = 12 * 3600; // Start at 12:00:00 (in seconds from midnight)
+    private timeSpeed: number = 1; // Time multiplier (0.1, 0.2, 0.5, 1, 2, 5, 10)
+    private isPlaying: boolean = false;
+    private lastRealTime: number = 0;
+    private simulationLoopId: number | null = null;
     
     constructor() {
         this.initialize();
@@ -62,6 +67,17 @@ class RBMKSimulator {
                 // Use mock data for development
                 this.visualization.initializeReactor(this.getMockData());
             }
+            
+            // Set initial rod positions in 3D visualization to match startup defaults
+            // AZ (Emergency): 100% extracted - ready to drop for safety
+            // RR (Manual): 15% - main control rods for startup
+            // AR/LAR (Automatic): 25% - automatic regulation with headroom
+            // USP (Shortened): 55% - axial flux shaping
+            this.visualization.setRodPosition('RR' as ChannelType, 0.15);
+            this.visualization.setRodPosition('AR' as ChannelType, 0.25);
+            this.visualization.setRodPosition('LAR' as ChannelType, 0.25);
+            this.visualization.setRodPosition('USP' as ChannelType, 0.55);
+            this.visualization.setRodPosition('AZ' as ChannelType, 1.0);
         }
         
         // Get initial state
@@ -75,6 +91,20 @@ class RBMKSimulator {
     }
     
     private setupEventHandlers(): void {
+        // Play/Pause button
+        document.getElementById('btn-play-pause')?.addEventListener('click', () => this.togglePlayPause());
+        
+        // Speed control buttons
+        document.querySelectorAll('.speed-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const speed = parseFloat((e.target as HTMLElement).dataset.speed || '1');
+                this.setTimeSpeed(speed);
+                // Update active state
+                document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+                (e.target as HTMLElement).classList.add('active');
+            });
+        });
+        
         // Simulation control buttons
         document.getElementById('btn-step')?.addEventListener('click', () => this.step());
         document.getElementById('btn-run')?.addEventListener('click', () => this.run(10));
@@ -239,10 +269,10 @@ class RBMKSimulator {
         if (statusEl) {
             if (this.state.scram_active) {
                 statusEl.className = 'status-indicator status-scram';
-            } else if (this.running) {
+            } else if (this.isPlaying) {
                 statusEl.className = 'status-indicator status-running';
             } else {
-                statusEl.className = 'status-indicator status-stopped';
+                statusEl.className = 'status-indicator status-paused';
             }
         }
         
@@ -267,11 +297,11 @@ class RBMKSimulator {
         
         const alertsList = document.getElementById('alerts-list')!;
         
-        // Add new alerts
+        // Add new alerts with simulation time
         for (const alert of this.state.alerts) {
             const alertEl = document.createElement('div');
             alertEl.className = `alert ${alert.includes('CRITICAL') ? 'alert-critical' : 'alert-warning'}`;
-            alertEl.textContent = `[${new Date().toLocaleTimeString()}] ${alert}`;
+            alertEl.textContent = `[${this.formatSimulationTime()}] ${alert}`;
             alertsList.insertBefore(alertEl, alertsList.firstChild);
         }
         
@@ -410,11 +440,11 @@ class RBMKSimulator {
             
             this.updateUI();
             
-            // Add visual alert
+            // Add visual alert with simulation time
             const alertsList = document.getElementById('alerts-list')!;
             const alertEl = document.createElement('div');
             alertEl.className = 'alert alert-critical';
-            alertEl.textContent = `[${new Date().toLocaleTimeString()}] ⚠ EMERGENCY SCRAM INITIATED (AZ-5)`;
+            alertEl.textContent = `[${this.formatSimulationTime()}] ⚠ EMERGENCY SCRAM INITIATED (AZ-5)`;
             alertsList.insertBefore(alertEl, alertsList.firstChild);
         } catch (e) {
             console.error('SCRAM failed:', e);
@@ -428,12 +458,67 @@ class RBMKSimulator {
     }
     
     private async reset(): Promise<void> {
+        // Pause simulation if running
+        if (this.isPlaying) {
+            this.pauseSimulation();
+        }
+        
+        // Reset simulation time to 12:00:00
+        this.simulationTime = 12 * 3600;
+        this.updateTimeDisplay();
+        
+        // Reset time speed to 1x
+        this.timeSpeed = 1;
+        document.querySelectorAll('.speed-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if ((btn as HTMLElement).dataset.speed === '1') {
+                btn.classList.add('active');
+            }
+        });
+        
         try {
             this.state = await invoke<ReactorState>('reset_simulation');
             document.getElementById('alerts-list')!.innerHTML = '';
+            
+            // Reset control rod sliders to realistic startup positions:
+            // AZ (Emergency): 100% extracted - ready to drop for safety
+            // RR (Manual): 15% - main control rods for startup
+            // AR/LAR (Automatic): 25% - automatic regulation with headroom
+            // USP (Shortened): 55% - axial flux shaping
+            const sliderValues = {
+                'manual-rods': 15,
+                'auto-rods': 25,
+                'usp-rods': 55,
+                'az-rods': 100
+            };
+            const labelIds = {
+                'manual-rods': 'manual-rod-pos',
+                'auto-rods': 'auto-rod-pos',
+                'usp-rods': 'usp-rod-pos',
+                'az-rods': 'az-rod-pos'
+            };
+            
+            Object.entries(sliderValues).forEach(([sliderId, value]) => {
+                const slider = document.getElementById(sliderId) as HTMLInputElement;
+                if (slider) slider.value = String(value);
+                const label = document.getElementById(labelIds[sliderId as keyof typeof labelIds]);
+                if (label) label.textContent = `${value}%`;
+            });
+            
+            // Reset visualization rod positions
+            this.visualization?.setRodPosition('RR' as ChannelType, 0.15);
+            this.visualization?.setRodPosition('AR' as ChannelType, 0.25);
+            this.visualization?.setRodPosition('LAR' as ChannelType, 0.25);
+            this.visualization?.setRodPosition('USP' as ChannelType, 0.55);
+            this.visualization?.setRodPosition('AZ' as ChannelType, 1.0);
+            
             this.updateUI();
         } catch (e) {
             console.error('Reset failed:', e);
+            // Still reset UI even if backend fails
+            this.state = this.getMockState();
+            document.getElementById('alerts-list')!.innerHTML = '';
+            this.updateUI();
         }
     }
     
@@ -454,6 +539,152 @@ class RBMKSimulator {
         }
     }
     
+    // Real-time simulation methods
+    
+    /**
+     * Format simulation time as HH:MM:SS
+     */
+    private formatSimulationTime(): string {
+        const totalSeconds = Math.floor(this.simulationTime);
+        const hours = Math.floor(totalSeconds / 3600) % 24;
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    
+    /**
+     * Update the simulation time display
+     */
+    private updateTimeDisplay(): void {
+        const timeEl = document.getElementById('sim-time-display');
+        if (timeEl) {
+            timeEl.textContent = this.formatSimulationTime();
+        }
+    }
+    
+    /**
+     * Set the time speed multiplier
+     */
+    private setTimeSpeed(speed: number): void {
+        this.timeSpeed = speed;
+        console.log(`Time speed set to ${speed}x`);
+    }
+    
+    /**
+     * Toggle play/pause state
+     */
+    private togglePlayPause(): void {
+        if (this.isPlaying) {
+            this.pauseSimulation();
+        } else {
+            this.startSimulation();
+        }
+    }
+    
+    /**
+     * Start the real-time simulation loop
+     */
+    private startSimulation(): void {
+        if (this.isPlaying) return;
+        
+        this.isPlaying = true;
+        this.lastRealTime = performance.now();
+        
+        // Update button
+        const btn = document.getElementById('btn-play-pause');
+        if (btn) {
+            btn.textContent = '⏸ Pause';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-success');
+        }
+        
+        // Update status indicator
+        const statusEl = document.getElementById('status-indicator');
+        if (statusEl) {
+            statusEl.className = 'status-indicator status-running';
+        }
+        
+        // Start the simulation loop
+        this.simulationLoop();
+    }
+    
+    /**
+     * Pause the simulation
+     */
+    private pauseSimulation(): void {
+        this.isPlaying = false;
+        
+        if (this.simulationLoopId !== null) {
+            cancelAnimationFrame(this.simulationLoopId);
+            this.simulationLoopId = null;
+        }
+        
+        // Update button
+        const btn = document.getElementById('btn-play-pause');
+        if (btn) {
+            btn.textContent = '▶ Play';
+            btn.classList.remove('btn-success');
+            btn.classList.add('btn-primary');
+        }
+        
+        // Update status indicator
+        const statusEl = document.getElementById('status-indicator');
+        if (statusEl && !this.state?.scram_active) {
+            statusEl.className = 'status-indicator status-paused';
+        }
+    }
+    
+    /**
+     * Main simulation loop - runs in real-time
+     */
+    private simulationLoop(): void {
+        if (!this.isPlaying) return;
+        
+        const currentTime = performance.now();
+        const deltaRealTime = (currentTime - this.lastRealTime) / 1000; // Convert to seconds
+        this.lastRealTime = currentTime;
+        
+        // Calculate simulation time advancement
+        const simTimeDelta = deltaRealTime * this.timeSpeed;
+        this.simulationTime += simTimeDelta;
+        
+        // Handle day wrap-around (24 hours = 86400 seconds)
+        if (this.simulationTime >= 86400) {
+            this.simulationTime -= 86400;
+        }
+        
+        // Update time display
+        this.updateTimeDisplay();
+        
+        // Determine how many physics steps to run based on time delta
+        // We want to run physics at a reasonable rate (e.g., 10 Hz minimum)
+        const physicsStepsPerSecond = 10;
+        const stepsToRun = Math.max(1, Math.round(simTimeDelta * physicsStepsPerSecond));
+        
+        // Run physics simulation
+        this.runPhysicsSteps(stepsToRun);
+        
+        // Schedule next frame
+        this.simulationLoopId = requestAnimationFrame(() => this.simulationLoop());
+    }
+    
+    /**
+     * Run physics simulation steps
+     */
+    private async runPhysicsSteps(steps: number): Promise<void> {
+        try {
+            const response = await invoke<SimulationResponse>('simulation_run', { steps });
+            this.state = response.state;
+            this.updateUI();
+        } catch (e) {
+            // Mock physics for development
+            if (this.state) {
+                this.state.time += this.state.dt * steps;
+                this.updateUI();
+            }
+        }
+    }
+    
     // Mock data for development without Tauri backend
     private getMockState(): ReactorState {
         return {
@@ -470,13 +701,13 @@ class RBMKSimulator {
             iodine_135: 1e15,
             xenon_135: 3e15,
             xenon_reactivity: -0.03,
-            avg_fuel_temp: 800,
-            avg_coolant_temp: 560,
-            avg_graphite_temp: 600,
+            avg_fuel_temp: 900,       // Equilibrium at 100% power
+            avg_coolant_temp: 550,    // Below saturation (558K)
+            avg_graphite_temp: 650,   // Equilibrium at 100% power
             avg_coolant_void: 0,
             scram_active: false,
             scram_time: 0,
-            axial_flux: Array(50).fill(0).map((_, i) => 
+            axial_flux: Array(50).fill(0).map((_, i) =>
                 Math.cos(Math.PI * (i - 25) / 50) * (i > 5 && i < 45 ? 1 : 0)
             ),
             alerts: [],
@@ -503,8 +734,18 @@ class RBMKSimulator {
             });
         }
         
-        // Generate mock control rods with different types
+        // Generate mock control rods with different types and realistic startup positions
+        // AZ (Emergency): 100% extracted - ready to drop for safety
+        // RR (Manual): 15% - main control rods for startup
+        // AR/LAR (Automatic): 25% - automatic regulation with headroom
+        // USP (Shortened): 55% - axial flux shaping
         const rodTypes = ['Emergency', 'Automatic', 'Shortened', 'Manual'];
+        const rodPositions: Record<string, number> = {
+            'Emergency': 1.0,   // AZ - fully extracted
+            'Automatic': 0.25,  // AR/LAR
+            'Shortened': 0.55,  // USP
+            'Manual': 0.15      // RR
+        };
         for (let i = 0; i < 40; i++) {
             const angle = (i / 40) * Math.PI * 2;
             const radius = 350 + (i % 2) * 100;
@@ -513,7 +754,7 @@ class RBMKSimulator {
                 id: i,
                 x: Math.cos(angle) * radius,
                 y: Math.sin(angle) * radius,
-                position: 0.8,
+                position: rodPositions[rodType],
                 rod_type: rodType,
                 worth: rodType === 'Emergency' ? 0.005 : 0.001,
             });
