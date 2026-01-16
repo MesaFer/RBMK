@@ -48,6 +48,12 @@ class RBMKSimulator {
     private lastRealTime: number = 0;
     private simulationLoopId: number | null = null;
     
+    // Performance optimization flags
+    private isPhysicsRunning: boolean = false;
+    private is3DUpdatePending: boolean = false;
+    private last3DUpdateTime: number = 0;
+    private readonly MIN_3D_UPDATE_INTERVAL: number = 100; // ms between 3D updates
+    
     constructor() {
         this.initialize();
     }
@@ -381,6 +387,21 @@ class RBMKSimulator {
     private async update3D(): Promise<void> {
         if (!this.visualization || !this.state) return;
         
+        // Throttle 3D updates to prevent performance issues
+        const now = performance.now();
+        if (now - this.last3DUpdateTime < this.MIN_3D_UPDATE_INTERVAL) {
+            // Schedule a pending update if not already scheduled
+            if (!this.is3DUpdatePending) {
+                this.is3DUpdatePending = true;
+                setTimeout(() => {
+                    this.is3DUpdatePending = false;
+                    this.update3D();
+                }, this.MIN_3D_UPDATE_INTERVAL - (now - this.last3DUpdateTime));
+            }
+            return;
+        }
+        this.last3DUpdateTime = now;
+        
         try {
             const data = await invoke<Reactor3DData>('get_3d_data');
             this.visualization.updateState(data, this.state.power_percent);
@@ -670,19 +691,108 @@ class RBMKSimulator {
     
     /**
      * Run physics simulation steps
+     * Protected against overlapping calls to prevent lag accumulation
      */
     private async runPhysicsSteps(steps: number): Promise<void> {
+        // Prevent overlapping physics calls
+        if (this.isPhysicsRunning) {
+            return;
+        }
+        
+        this.isPhysicsRunning = true;
+        
         try {
             const response = await invoke<SimulationResponse>('simulation_run', { steps });
             this.state = response.state;
-            this.updateUI();
+            this.updateUIFast();
         } catch (e) {
             // Mock physics for development
             if (this.state) {
                 this.state.time += this.state.dt * steps;
-                this.updateUI();
+                this.updateUIFast();
+            }
+        } finally {
+            this.isPhysicsRunning = false;
+        }
+    }
+    
+    /**
+     * Fast UI update - only updates critical values without 3D refresh
+     * Used during continuous simulation to reduce overhead
+     */
+    private updateUIFast(): void {
+        if (!this.state) return;
+        
+        // Helper to safely format numbers
+        const safeFixed = (val: number | null | undefined, digits: number): string => {
+            if (val === null || val === undefined || !Number.isFinite(val)) return '---';
+            return val.toFixed(digits);
+        };
+        
+        // Update only critical displays
+        const powerEl = document.getElementById('power-value');
+        if (powerEl) {
+            powerEl.textContent = `${safeFixed(this.state.power_mw, 0)} MW (${safeFixed(this.state.power_percent, 1)}%)`;
+            powerEl.className = `parameter-value ${this.getValueClass(this.state.power_percent ?? 0, 100, 110)}`;
+        }
+        
+        const keffEl = document.getElementById('keff-value');
+        if (keffEl) {
+            keffEl.textContent = safeFixed(this.state.k_eff, 5);
+        }
+        
+        const reactivityEl = document.getElementById('reactivity-value');
+        if (reactivityEl) {
+            reactivityEl.textContent = `${safeFixed((this.state.reactivity ?? 0) * 100, 3)}% (${safeFixed(this.state.reactivity_dollars, 2)}$)`;
+        }
+        
+        const periodEl = document.getElementById('period-value');
+        if (periodEl) {
+            const period = this.state.period;
+            if (period === null || period === undefined || !Number.isFinite(period) || Math.abs(period) > 1e10) {
+                periodEl.textContent = '∞ s';
+            } else {
+                periodEl.textContent = `${period.toFixed(1)} s`;
             }
         }
+        
+        // Update temperatures
+        const fuelTempEl = document.getElementById('fuel-temp');
+        if (fuelTempEl) {
+            fuelTempEl.textContent = `${safeFixed(this.state.avg_fuel_temp, 0)} K`;
+            fuelTempEl.className = `parameter-value ${this.getValueClass(this.state.avg_fuel_temp ?? 0, 1000, 1200)}`;
+        }
+        
+        const coolantTempEl = document.getElementById('coolant-temp');
+        if (coolantTempEl) {
+            coolantTempEl.textContent = `${safeFixed(this.state.avg_coolant_temp, 0)} K`;
+        }
+        
+        const graphiteTempEl = document.getElementById('graphite-temp');
+        if (graphiteTempEl) {
+            graphiteTempEl.textContent = `${safeFixed(this.state.avg_graphite_temp, 0)} K`;
+        }
+        
+        const voidEl = document.getElementById('void-fraction');
+        if (voidEl) {
+            voidEl.textContent = `${safeFixed(this.state.avg_coolant_void, 1)}%`;
+        }
+        
+        // Update status indicator for SCRAM
+        if (this.state.scram_active) {
+            const statusEl = document.getElementById('status-indicator');
+            if (statusEl) {
+                statusEl.className = 'status-indicator status-scram';
+            }
+        }
+        
+        // Update alerts (only if there are new ones)
+        if (this.state.alerts.length > 0) {
+            this.updateAlerts();
+        }
+        
+        // Throttled 3D update
+        this.update3D();
     }
     
     // Mock data for development without Tauri backend
