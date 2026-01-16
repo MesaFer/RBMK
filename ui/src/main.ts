@@ -8,6 +8,19 @@ import { ReactorVisualization, Reactor3DData, ControlRod } from './visualization
 import { ChannelType } from './rbmk_core_layout';
 import { ReactorGraphs } from './graphs';
 
+// Auto regulator settings interface
+interface AutoRegulatorSettings {
+    enabled: boolean;
+    target_power: number;
+    kp: number;
+    ki: number;
+    kd: number;
+    integral_error: number;
+    last_error: number;
+    rod_speed: number;
+    deadband: number;
+}
+
 // Reactor state interface (matches Rust struct)
 interface ReactorState {
     time: number;
@@ -29,6 +42,7 @@ interface ReactorState {
     avg_coolant_void: number;
     scram_active: boolean;
     scram_time: number;
+    auto_regulator: AutoRegulatorSettings;
     axial_flux: number[];
     alerts: string[];
     // Steam explosion state - based on physics simulation
@@ -172,6 +186,39 @@ class RBMKSimulator {
             document.getElementById('az-rod-pos')!.textContent = `${value}%`;
             this.visualization?.setRodPosition('AZ' as ChannelType, pos);
             this.moveRodGroup('emergency', pos);
+        });
+        
+        // Automatic regulator controls
+        document.getElementById('ar-enabled')?.addEventListener('change', (e) => {
+            const enabled = (e.target as HTMLInputElement).checked;
+            this.setAutoRegulatorEnabled(enabled);
+            
+            // Update UI to show/hide manual control of AR rods
+            const autoRodsContainer = document.getElementById('auto-rods-container');
+            const autoRodsSlider = document.getElementById('auto-rods') as HTMLInputElement;
+            const arStatus = document.getElementById('ar-status');
+            
+            if (enabled) {
+                autoRodsContainer?.setAttribute('style', 'opacity: 0.5;');
+                autoRodsSlider?.setAttribute('disabled', 'true');
+                if (arStatus) {
+                    arStatus.textContent = 'ENABLED';
+                    arStatus.style.color = '#4ade80';
+                }
+            } else {
+                autoRodsContainer?.setAttribute('style', 'opacity: 1;');
+                autoRodsSlider?.removeAttribute('disabled');
+                if (arStatus) {
+                    arStatus.textContent = 'DISABLED';
+                    arStatus.style.color = '#fbbf24';
+                }
+            }
+        });
+        
+        document.getElementById('target-power')?.addEventListener('input', (e) => {
+            const value = parseInt((e.target as HTMLInputElement).value);
+            document.getElementById('target-power-value')!.textContent = `${value}%`;
+            this.setTargetPower(value);
         });
         
         // Time step slider
@@ -452,10 +499,47 @@ class RBMKSimulator {
             const data = await invoke<Reactor3DData>('get_3d_data');
             this.visualization.updateState(data, this.state.power_percent);
             this.visualization.highlightScram(this.state.scram_active);
+            
+            // Update AR rod position display from actual control rod data
+            this.updateARPositionFromRods(data.control_rods);
         } catch (e) {
             // Use mock data
             const mockData = this.getMockData();
             this.visualization.updateState(mockData, this.state.power_percent);
+        }
+    }
+    
+    /**
+     * Update AR rod position display from control rod data
+     */
+    private updateARPositionFromRods(controlRods: ControlRod[]): void {
+        // Find automatic rods and calculate average position
+        const autoRods = controlRods.filter(rod => rod.rod_type === 'Automatic');
+        if (autoRods.length === 0) return;
+        
+        const avgPosition = autoRods.reduce((sum, rod) => sum + rod.position, 0) / autoRods.length;
+        const positionPercent = Math.round(avgPosition * 100);
+        
+        // Update display
+        const arPositionEl = document.getElementById('ar-position-display');
+        if (arPositionEl) {
+            arPositionEl.textContent = `${positionPercent}%`;
+        }
+        
+        // Update slider (only if auto-regulation is enabled, to show current position)
+        if (this.state?.auto_regulator.enabled) {
+            const autoRodsSlider = document.getElementById('auto-rods') as HTMLInputElement;
+            const autoRodPos = document.getElementById('auto-rod-pos');
+            if (autoRodsSlider) {
+                autoRodsSlider.value = String(positionPercent);
+            }
+            if (autoRodPos) {
+                autoRodPos.textContent = `${positionPercent}%`;
+            }
+            
+            // Update 3D visualization
+            this.visualization?.setRodPosition('AR' as ChannelType, avgPosition);
+            this.visualization?.setRodPosition('LAR' as ChannelType, avgPosition);
         }
     }
     
@@ -609,6 +693,71 @@ class RBMKSimulator {
             await invoke('set_time_step', { dt });
         } catch (e) {
             console.error('Failed to set time step:', e);
+        }
+    }
+    
+    /**
+     * Enable or disable automatic regulator (AR/LAR)
+     */
+    private async setAutoRegulatorEnabled(enabled: boolean): Promise<void> {
+        try {
+            await invoke('set_auto_regulator_enabled', { enabled });
+            console.log(`[RBMK] Auto-regulator ${enabled ? 'enabled' : 'disabled'}`);
+        } catch (e) {
+            console.error('Failed to set auto-regulator enabled:', e);
+        }
+    }
+    
+    /**
+     * Set target power for automatic regulator
+     */
+    private async setTargetPower(targetPercent: number): Promise<void> {
+        try {
+            await invoke('set_target_power', { targetPercent });
+            console.log(`[RBMK] Target power set to ${targetPercent}%`);
+        } catch (e) {
+            console.error('Failed to set target power:', e);
+        }
+    }
+    
+    /**
+     * Update auto-regulator display based on current state
+     * Shows current AR rod position and updates slider/visualization
+     */
+    private updateAutoRegulatorDisplay(): void {
+        if (!this.state) return;
+        
+        // Get AR rod positions from control rods data (we need to fetch this)
+        // For now, we'll estimate based on the auto_regulator state
+        // The actual position is managed by the backend
+        
+        // Update AR position display - this will be updated when we get control rod data
+        const arPositionEl = document.getElementById('ar-position-display');
+        if (arPositionEl) {
+            // We'll update this from the control rods data in update3D
+            // For now, show that it's being controlled automatically
+            if (this.state.auto_regulator.enabled) {
+                arPositionEl.style.color = '#4ade80';
+            } else {
+                arPositionEl.style.color = '#aaa';
+            }
+        }
+        
+        // Update AR enabled checkbox state
+        const arEnabledCheckbox = document.getElementById('ar-enabled') as HTMLInputElement;
+        if (arEnabledCheckbox && arEnabledCheckbox.checked !== this.state.auto_regulator.enabled) {
+            arEnabledCheckbox.checked = this.state.auto_regulator.enabled;
+        }
+        
+        // Update target power slider if it differs
+        const targetPowerSlider = document.getElementById('target-power') as HTMLInputElement;
+        const targetPowerValue = document.getElementById('target-power-value');
+        if (targetPowerSlider && targetPowerValue) {
+            const currentTarget = Math.round(this.state.auto_regulator.target_power);
+            if (parseInt(targetPowerSlider.value) !== currentTarget) {
+                targetPowerSlider.value = String(currentTarget);
+                targetPowerValue.textContent = `${currentTarget}%`;
+            }
         }
     }
     
@@ -870,6 +1019,9 @@ class RBMKSimulator {
             }
         }
         
+        // Update auto-regulator display
+        this.updateAutoRegulatorDisplay();
+        
         // Update alerts (only if there are new ones)
         if (this.state.alerts.length > 0) {
             this.updateAlerts();
@@ -934,6 +1086,17 @@ class RBMKSimulator {
             avg_coolant_void: 0,
             scram_active: false,
             scram_time: 0,
+            auto_regulator: {
+                enabled: true,
+                target_power: 100.0,
+                kp: 0.002,
+                ki: 0.0001,
+                kd: 0.001,
+                integral_error: 0.0,
+                last_error: 0.0,
+                rod_speed: 0.01,
+                deadband: 0.5,
+            },
             axial_flux: Array(50).fill(0).map((_, i) =>
                 Math.cos(Math.PI * (i - 25) / 50) * (i > 5 && i < 45 ? 1 : 0)
             ),

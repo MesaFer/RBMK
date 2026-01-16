@@ -33,6 +33,10 @@ fn main() {
             set_time_step,
             reset_simulation,
             get_3d_data,
+            // Automatic regulator (AR/LAR) commands
+            set_auto_regulator_enabled,
+            set_target_power,
+            get_auto_regulator,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running RBMK Simulator");

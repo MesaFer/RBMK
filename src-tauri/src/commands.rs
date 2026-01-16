@@ -1,12 +1,12 @@
 //! Tauri commands for RBMK reactor simulation
-//! 
+//!
 //! These commands are exposed to the frontend via Tauri's IPC mechanism
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use std::sync::Arc;
 
-use crate::reactor::{ReactorSimulator, ReactorState, ControlRod, FuelChannel, RodType};
+use crate::reactor::{ReactorSimulator, ReactorState, ControlRod, FuelChannel, RodType, AutoRegulatorSettings};
 
 /// Simulation state wrapper for Tauri
 pub struct SimulatorState(pub Arc<ReactorSimulator>);
@@ -171,6 +171,37 @@ pub fn set_time_step(simulator: State<SimulatorState>, dt: f64) {
 pub fn reset_simulation(simulator: State<SimulatorState>) -> ReactorState {
     simulator.0.reset();
     simulator.0.get_state()
+}
+
+// ============================================================================
+// Automatic Regulator (AR/LAR) Commands
+// ============================================================================
+
+/// Enable or disable automatic power regulator (AR/LAR)
+#[tauri::command]
+pub fn set_auto_regulator_enabled(
+    simulator: State<SimulatorState>,
+    enabled: bool,
+) -> AutoRegulatorSettings {
+    simulator.0.set_auto_regulator_enabled(enabled);
+    simulator.0.get_auto_regulator()
+}
+
+/// Set target power for automatic regulator
+/// Target is in percent of nominal power (5-110%)
+#[tauri::command]
+pub fn set_target_power(
+    simulator: State<SimulatorState>,
+    target_percent: f64,
+) -> AutoRegulatorSettings {
+    simulator.0.set_target_power(target_percent);
+    simulator.0.get_auto_regulator()
+}
+
+/// Get current automatic regulator settings
+#[tauri::command]
+pub fn get_auto_regulator(simulator: State<SimulatorState>) -> AutoRegulatorSettings {
+    simulator.0.get_auto_regulator()
 }
 
 /// Get reactor parameters for 3D visualization

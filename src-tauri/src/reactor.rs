@@ -51,6 +51,36 @@ pub enum RodType {
     Emergency,   // Emergency protection (AZ)
 }
 
+/// Automatic power regulator settings (AR/LAR)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoRegulatorSettings {
+    pub enabled: bool,           // Is automatic regulation active
+    pub target_power: f64,       // Target power in % of nominal
+    pub kp: f64,                 // Proportional gain
+    pub ki: f64,                 // Integral gain
+    pub kd: f64,                 // Derivative gain
+    pub integral_error: f64,     // Accumulated integral error
+    pub last_error: f64,         // Previous error for derivative
+    pub rod_speed: f64,          // Max rod movement speed [fraction/s]
+    pub deadband: f64,           // Power error deadband [%]
+}
+
+impl Default for AutoRegulatorSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,        // AR is enabled by default
+            target_power: 100.0,  // Target 100% power
+            kp: 0.002,            // Proportional gain (conservative)
+            ki: 0.0001,           // Integral gain (slow correction)
+            kd: 0.001,            // Derivative gain (damping)
+            integral_error: 0.0,
+            last_error: 0.0,
+            rod_speed: 0.01,      // 1% per second max speed
+            deadband: 0.5,        // ±0.5% deadband
+        }
+    }
+}
+
 /// Complete reactor state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReactorState {
@@ -82,6 +112,9 @@ pub struct ReactorState {
     // Control
     pub scram_active: bool,
     pub scram_time: f64,     // Time since SCRAM [s]
+    
+    // Automatic regulator (AR/LAR)
+    pub auto_regulator: AutoRegulatorSettings,
     
     // Axial flux distribution
     pub axial_flux: Vec<f64>,
@@ -128,6 +161,7 @@ impl Default for ReactorState {
             avg_coolant_void: 0.0,
             scram_active: false,
             scram_time: 0.0,
+            auto_regulator: AutoRegulatorSettings::default(),
             axial_flux,
             alerts: Vec::new(),
             explosion_occurred: false,
@@ -242,6 +276,28 @@ impl ReactorSimulator {
     
     /// Perform one simulation step using Fortran physics
     pub fn step(&self) {
+        // First, run automatic regulator if enabled (before physics step)
+        // This needs to be done with separate locks to avoid deadlock
+        let (ar_enabled, ar_target, ar_settings, current_power, dt, scram_active) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.auto_regulator.enabled,
+                state.auto_regulator.target_power,
+                state.auto_regulator.clone(),
+                state.power_percent,
+                state.dt,
+                state.scram_active,
+            )
+        };
+        
+        // Run automatic regulator (AR/LAR) - PID control for power
+        if ar_enabled && !scram_active {
+            let rod_adjustment = self.calculate_ar_adjustment(&ar_settings, current_power, dt);
+            if rod_adjustment.abs() > 1e-6 {
+                self.adjust_automatic_rods(rod_adjustment);
+            }
+        }
+        
         let mut state = self.state.lock().unwrap();
         
         state.alerts.clear();
@@ -288,6 +344,21 @@ impl ReactorSimulator {
         state.period = if result.period > 1.0e20 { f64::INFINITY } else { result.period };
         state.reactivity_dollars = state.reactivity / constants::BETA_EFF;
         
+        // Update automatic regulator state (PID integral/derivative terms)
+        if state.auto_regulator.enabled && !state.scram_active {
+            let error = state.auto_regulator.target_power - state.power_percent;
+            
+            // Only accumulate integral if error is outside deadband
+            if error.abs() > state.auto_regulator.deadband {
+                // Anti-windup: limit integral accumulation
+                let max_integral = 50.0; // Limit integral term
+                state.auto_regulator.integral_error =
+                    (state.auto_regulator.integral_error + error * dt).clamp(-max_integral, max_integral);
+            }
+            
+            state.auto_regulator.last_error = error;
+        }
+        
         // Update axial flux distribution using Fortran
         state.axial_flux = fortran_ffi::update_axial_flux(50, state.neutron_population);
         
@@ -322,6 +393,51 @@ impl ReactorSimulator {
         
         // Update time
         state.time += dt;
+    }
+    
+    /// Calculate automatic regulator (AR) rod adjustment using PID control
+    /// Returns the position change for automatic rods (positive = withdraw, negative = insert)
+    fn calculate_ar_adjustment(&self, settings: &AutoRegulatorSettings, current_power: f64, dt: f64) -> f64 {
+        let error = settings.target_power - current_power;
+        
+        // If within deadband, no adjustment needed
+        if error.abs() <= settings.deadband {
+            return 0.0;
+        }
+        
+        // PID control calculation
+        // P: Proportional to current error
+        let p_term = settings.kp * error;
+        
+        // I: Integral of error over time (already accumulated in settings)
+        let i_term = settings.ki * settings.integral_error;
+        
+        // D: Rate of change of error
+        let d_term = if dt > 0.0 {
+            settings.kd * (error - settings.last_error) / dt
+        } else {
+            0.0
+        };
+        
+        // Combined PID output
+        let output = p_term + i_term + d_term;
+        
+        // Limit rod movement speed
+        let max_movement = settings.rod_speed * dt;
+        output.clamp(-max_movement, max_movement)
+    }
+    
+    /// Adjust automatic (AR/LAR) rod positions
+    /// positive delta = withdraw rods (increase power)
+    /// negative delta = insert rods (decrease power)
+    fn adjust_automatic_rods(&self, delta: f64) {
+        let mut rods = self.control_rods.lock().unwrap();
+        for rod in rods.iter_mut() {
+            if rod.rod_type == RodType::Automatic {
+                // Withdraw to increase power, insert to decrease
+                rod.position = (rod.position + delta).clamp(0.0, 1.0);
+            }
+        }
     }
     
     /// Initiate emergency SCRAM
@@ -385,6 +501,33 @@ impl ReactorSimulator {
                 rod.position = new_position.clamp(0.0, 1.0);
             }
         }
+    }
+    
+    /// Enable or disable automatic regulator (AR/LAR)
+    pub fn set_auto_regulator_enabled(&self, enabled: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.auto_regulator.enabled = enabled;
+        
+        // Reset PID state when toggling
+        if enabled {
+            state.auto_regulator.integral_error = 0.0;
+            state.auto_regulator.last_error = 0.0;
+        }
+    }
+    
+    /// Set target power for automatic regulator
+    pub fn set_target_power(&self, target_percent: f64) {
+        let mut state = self.state.lock().unwrap();
+        // Clamp target power to safe operating range (5% - 110%)
+        state.auto_regulator.target_power = target_percent.clamp(5.0, 110.0);
+        
+        // Reset integral error when target changes to avoid overshoot
+        state.auto_regulator.integral_error = 0.0;
+    }
+    
+    /// Get automatic regulator settings
+    pub fn get_auto_regulator(&self) -> AutoRegulatorSettings {
+        self.state.lock().unwrap().auto_regulator.clone()
     }
     
     /// Get current state snapshot
