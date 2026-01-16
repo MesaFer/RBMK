@@ -314,6 +314,44 @@
             border-radius: 3px;
         }
         
+        #graphs-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 10px 15px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        
+        #graphs-toolbar .toolbar-label {
+            color: #aaa;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .time-range-btn {
+            padding: 6px 12px;
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        
+        .time-range-btn:hover {
+            background: #1a4a7a;
+            color: white;
+        }
+        
+        .time-range-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: white;
+        }
+        
         #view-controls {
             position: absolute;
             top: 10px;
@@ -621,6 +659,15 @@
             
             <!-- Graphs Container -->
             <div id="graphs-container">
+                <div id="graphs-toolbar">
+                    <span class="toolbar-label">Time Range:</span>
+                    <button class="time-range-btn active" data-range="10">10 sec</button>
+                    <button class="time-range-btn" data-range="30">30 sec</button>
+                    <button class="time-range-btn" data-range="60">1 min</button>
+                    <button class="time-range-btn" data-range="300">5 min</button>
+                    <button class="time-range-btn" data-range="3600">1 hour</button>
+                    <button class="time-range-btn" data-range="86400">1 day</button>
+                </div>
                 <div id="graphs-grid">
                     <div class="graph-panel">
                         <div class="panel-title">🔥 Thermal Power (MW)</div>

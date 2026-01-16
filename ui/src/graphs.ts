@@ -1,6 +1,6 @@
 /**
  * RBMK-1000 Reactor Simulator - Graphs Module
- * Real-time parameter graphs with historical data
+ * Real-time parameter graphs with historical data and time range selection
  */
 
 interface GraphConfig {
@@ -16,18 +16,25 @@ interface GraphConfig {
 }
 
 interface DataPoint {
-    time: number;
+    timestamp: number;  // Real timestamp in ms
+    simTime: number;    // Simulation time
     value: number;
 }
+
+// Time range options in seconds
+type TimeRange = 10 | 30 | 60 | 300 | 3600 | 86400;
 
 export class ReactorGraphs {
     private graphs: Map<string, GraphConfig> = new Map();
     private dataHistory: Map<string, DataPoint[]> = new Map();
-    private maxDataPoints: number = 300; // 5 minutes at 1 point per second
+    private maxDataPoints: number = 100000; // Store lots of data
     private canvases: Map<string, HTMLCanvasElement> = new Map();
     private contexts: Map<string, CanvasRenderingContext2D> = new Map();
     private lastUpdateTime: number = 0;
     private readonly MIN_UPDATE_INTERVAL: number = 100; // ms between data points
+    
+    // Current time range for display (in seconds)
+    private currentTimeRange: TimeRange = 10;
     
     constructor() {
         this.initializeGraphConfigs();
@@ -67,11 +74,39 @@ export class ReactorGraphs {
             }
         }
         
+        // Setup time range buttons
+        this.setupTimeRangeButtons();
+        
         // Initial draw
         this.drawAllGraphs();
         
         // Handle resize
         window.addEventListener('resize', () => this.drawAllGraphs());
+    }
+    
+    /**
+     * Setup time range button event handlers
+     */
+    private setupTimeRangeButtons(): void {
+        document.querySelectorAll('.time-range-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const range = parseInt((e.target as HTMLElement).dataset.range || '10') as TimeRange;
+                this.setTimeRange(range);
+                
+                // Update active state
+                document.querySelectorAll('.time-range-btn').forEach(b => b.classList.remove('active'));
+                (e.target as HTMLElement).classList.add('active');
+            });
+        });
+    }
+    
+    /**
+     * Set the time range for graph display
+     */
+    public setTimeRange(range: TimeRange): void {
+        this.currentTimeRange = range;
+        console.log(`[Graphs] Time range set to ${range} seconds`);
+        this.drawAllGraphs();
     }
     
     /**
@@ -89,63 +124,111 @@ export class ReactorGraphs {
         xenon_135: number;
         period: number;
     }): void {
-        // Throttle updates to prevent too many data points
         const now = performance.now();
-        if (now - this.lastUpdateTime < this.MIN_UPDATE_INTERVAL) {
-            return;
-        }
-        this.lastUpdateTime = now;
         
-        const time = state.time;
+        // Always redraw graphs (to update time-based filtering)
+        // But only add new data points at throttled rate
+        const shouldAddData = (now - this.lastUpdateTime) >= this.MIN_UPDATE_INTERVAL;
         
-        // Only add data if values are valid
-        if (Number.isFinite(state.power_mw)) {
-            this.addDataPoint('power', time, state.power_mw);
-        }
-        if (Number.isFinite(state.k_eff)) {
-            this.addDataPoint('keff', time, state.k_eff);
-        }
-        if (Number.isFinite(state.reactivity_dollars)) {
-            this.addDataPoint('reactivity', time, state.reactivity_dollars);
-        }
-        if (Number.isFinite(state.avg_fuel_temp)) {
-            this.addDataPoint('fuel-temp', time, state.avg_fuel_temp);
-        }
-        if (Number.isFinite(state.avg_coolant_temp)) {
-            this.addDataPoint('coolant-temp', time, state.avg_coolant_temp);
-        }
-        if (Number.isFinite(state.avg_graphite_temp)) {
-            this.addDataPoint('graphite-temp', time, state.avg_graphite_temp);
-        }
-        if (Number.isFinite(state.avg_coolant_void)) {
-            this.addDataPoint('void', time, state.avg_coolant_void);
-        }
-        if (Number.isFinite(state.xenon_135)) {
-            this.addDataPoint('xenon', time, state.xenon_135);
+        if (shouldAddData) {
+            this.lastUpdateTime = now;
+            
+            const timestamp = Date.now(); // Use real timestamp
+            const simTime = state.time;
+            
+            // Only add data if values are valid
+            if (Number.isFinite(state.power_mw)) {
+                this.addDataPoint('power', timestamp, simTime, state.power_mw);
+            }
+            if (Number.isFinite(state.k_eff)) {
+                this.addDataPoint('keff', timestamp, simTime, state.k_eff);
+            }
+            if (Number.isFinite(state.reactivity_dollars)) {
+                this.addDataPoint('reactivity', timestamp, simTime, state.reactivity_dollars);
+            }
+            if (Number.isFinite(state.avg_fuel_temp)) {
+                this.addDataPoint('fuel-temp', timestamp, simTime, state.avg_fuel_temp);
+            }
+            if (Number.isFinite(state.avg_coolant_temp)) {
+                this.addDataPoint('coolant-temp', timestamp, simTime, state.avg_coolant_temp);
+            }
+            if (Number.isFinite(state.avg_graphite_temp)) {
+                this.addDataPoint('graphite-temp', timestamp, simTime, state.avg_graphite_temp);
+            }
+            if (Number.isFinite(state.avg_coolant_void)) {
+                this.addDataPoint('void', timestamp, simTime, state.avg_coolant_void);
+            }
+            if (Number.isFinite(state.xenon_135)) {
+                this.addDataPoint('xenon', timestamp, simTime, state.xenon_135);
+            }
+            
+            // Handle period specially - clamp infinite values
+            let period = state.period;
+            if (!Number.isFinite(period) || Math.abs(period) > 1000) {
+                period = period > 0 ? 1000 : -1000;
+            }
+            this.addDataPoint('period', timestamp, simTime, period);
         }
         
-        // Handle period specially - clamp infinite values
-        let period = state.period;
-        if (!Number.isFinite(period) || Math.abs(period) > 1000) {
-            period = period > 0 ? 1000 : -1000;
-        }
-        this.addDataPoint('period', time, period);
-        
-        // Redraw all graphs
+        // Always redraw all graphs (to update time-based filtering)
         this.drawAllGraphs();
     }
     
-    private addDataPoint(graphId: string, time: number, value: number): void {
+    private addDataPoint(graphId: string, timestamp: number, simTime: number, value: number): void {
         const history = this.dataHistory.get(graphId);
         if (!history) return;
         
         // Add new point
-        history.push({ time, value });
+        history.push({ timestamp, simTime, value });
         
         // Remove old points if exceeding max
         while (history.length > this.maxDataPoints) {
             history.shift();
         }
+    }
+    
+    /**
+     * Get data for display based on current time range with averaging
+     * Uses real timestamps for filtering
+     */
+    private getDisplayData(graphId: string): DataPoint[] {
+        const history = this.dataHistory.get(graphId);
+        if (!history || history.length === 0) return [];
+        
+        const now = Date.now();
+        const cutoffTime = now - (this.currentTimeRange * 1000); // Convert seconds to ms
+        
+        // Filter data within time range using real timestamps
+        const filteredData = history.filter(p => p.timestamp >= cutoffTime);
+        
+        if (filteredData.length === 0) {
+            // If no data in range, return the last point
+            return history.length > 0 ? [history[history.length - 1]] : [];
+        }
+        
+        // For short time ranges (10s, 30s, 1min), show raw data (up to 200 points)
+        if (this.currentTimeRange <= 60 && filteredData.length <= 200) {
+            return filteredData;
+        }
+        
+        // For longer time ranges or lots of data, average into buckets
+        const numBuckets = Math.min(100, filteredData.length); // Max 100 points on graph
+        const bucketSize = Math.ceil(filteredData.length / numBuckets);
+        
+        const averagedData: DataPoint[] = [];
+        
+        for (let i = 0; i < filteredData.length; i += bucketSize) {
+            const bucket = filteredData.slice(i, Math.min(i + bucketSize, filteredData.length));
+            if (bucket.length === 0) continue;
+            
+            const avgTimestamp = bucket.reduce((sum, p) => sum + p.timestamp, 0) / bucket.length;
+            const avgSimTime = bucket.reduce((sum, p) => sum + p.simTime, 0) / bucket.length;
+            const avgValue = bucket.reduce((sum, p) => sum + p.value, 0) / bucket.length;
+            
+            averagedData.push({ timestamp: avgTimestamp, simTime: avgSimTime, value: avgValue });
+        }
+        
+        return averagedData;
     }
     
     /**
@@ -171,9 +254,11 @@ export class ReactorGraphs {
         const canvas = this.canvases.get(graphId);
         const ctx = this.contexts.get(graphId);
         const config = this.graphs.get(graphId);
-        const history = this.dataHistory.get(graphId);
         
-        if (!canvas || !ctx || !config || !history) return;
+        if (!canvas || !ctx || !config) return;
+        
+        // Get display data (filtered and averaged based on time range)
+        const displayData = this.getDisplayData(graphId);
         
         // Set canvas size to match display size
         const rect = canvas.getBoundingClientRect();
@@ -189,23 +274,26 @@ export class ReactorGraphs {
         ctx.fillRect(0, 0, width, height);
         
         // Draw grid
-        this.drawGrid(ctx, width, height, config);
+        this.drawGrid(ctx, width, height, config, displayData);
         
         // Draw threshold lines
-        this.drawThresholds(ctx, width, height, config);
+        this.drawThresholds(ctx, width, height, config, displayData);
         
         // Draw data - show even with just 1 point
-        if (history.length >= 1) {
-            this.drawDataLine(ctx, width, height, config, history);
+        if (displayData.length >= 1) {
+            this.drawDataLine(ctx, width, height, config, displayData);
         }
         
         // Draw current value
-        if (history.length > 0) {
-            this.drawCurrentValue(ctx, width, height, config, history[history.length - 1].value);
+        if (displayData.length > 0) {
+            this.drawCurrentValue(ctx, width, height, config, displayData[displayData.length - 1].value);
         }
+        
+        // Draw time range label and data count
+        this.drawTimeRangeLabel(ctx, width, height, displayData.length);
     }
     
-    private drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, config: GraphConfig): void {
+    private drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, config: GraphConfig, displayData: DataPoint[]): void {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.lineWidth = 1;
         
@@ -226,39 +314,34 @@ export class ReactorGraphs {
             ctx.lineTo(x, height);
             ctx.stroke();
         }
-        
-        // Draw Y-axis labels
-        ctx.fillStyle = '#666';
-        ctx.font = '9px sans-serif';
-        ctx.textAlign = 'left';
-        
-        const minVal = config.minValue ?? 0;
-        const maxVal = config.maxValue ?? 100;
-        
-        for (let i = 0; i <= 4; i++) {
-            const y = (height / 4) * i + 10;
-            const value = maxVal - ((maxVal - minVal) / 4) * i;
-            let label: string;
-            
-            if (config.id === 'xenon') {
-                label = value.toExponential(1);
-            } else if (Math.abs(value) >= 1000) {
-                label = (value / 1000).toFixed(1) + 'k';
-            } else {
-                label = value.toFixed(config.id === 'keff' ? 3 : 0);
-            }
-            
-            ctx.fillText(label, 3, y);
-        }
     }
     
-    private drawThresholds(ctx: CanvasRenderingContext2D, width: number, height: number, config: GraphConfig): void {
-        const minVal = config.minValue ?? 0;
-        const maxVal = config.maxValue ?? 100;
+    private drawThresholds(ctx: CanvasRenderingContext2D, width: number, height: number, config: GraphConfig, displayData: DataPoint[]): void {
+        if (displayData.length === 0) return;
+        
+        // Calculate auto-scaled range
+        const values = displayData.map(p => p.value);
+        const dataMin = Math.min(...values);
+        const dataMax = Math.max(...values);
+        const dataPadding = Math.max((dataMax - dataMin) * 0.1, 0.001);
+        
+        let minVal = dataMin - dataPadding;
+        let maxVal = dataMax + dataPadding;
+        
+        if (maxVal - minVal < Math.abs(dataMax) * 0.01) {
+            const center = (dataMax + dataMin) / 2;
+            const halfRange = Math.max(Math.abs(center) * 0.01, 1);
+            minVal = center - halfRange;
+            maxVal = center + halfRange;
+        }
+        
+        const range = maxVal - minVal || 1;
+        const padding = 15;
+        const drawHeight = height - padding * 2;
         
         // Warning threshold
-        if (config.warningThreshold !== undefined) {
-            const y = height - ((config.warningThreshold - minVal) / (maxVal - minVal)) * height;
+        if (config.warningThreshold !== undefined && config.warningThreshold >= minVal && config.warningThreshold <= maxVal) {
+            const y = (height - padding) - ((config.warningThreshold - minVal) / range) * drawHeight;
             ctx.strokeStyle = 'rgba(251, 191, 36, 0.5)';
             ctx.lineWidth = 1;
             ctx.setLineDash([5, 5]);
@@ -270,8 +353,8 @@ export class ReactorGraphs {
         }
         
         // Critical threshold
-        if (config.criticalThreshold !== undefined) {
-            const y = height - ((config.criticalThreshold - minVal) / (maxVal - minVal)) * height;
+        if (config.criticalThreshold !== undefined && config.criticalThreshold >= minVal && config.criticalThreshold <= maxVal) {
+            const y = (height - padding) - ((config.criticalThreshold - minVal) / range) * drawHeight;
             ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
             ctx.lineWidth = 1;
             ctx.setLineDash([5, 5]);
@@ -283,9 +366,9 @@ export class ReactorGraphs {
         }
     }
     
-    private drawDataLine(ctx: CanvasRenderingContext2D, width: number, height: number, config: GraphConfig, history: DataPoint[]): void {
+    private drawDataLine(ctx: CanvasRenderingContext2D, width: number, height: number, config: GraphConfig, displayData: DataPoint[]): void {
         // Calculate auto-scaled min/max based on actual data
-        const values = history.map(p => p.value);
+        const values = displayData.map(p => p.value);
         const dataMin = Math.min(...values);
         const dataMax = Math.max(...values);
         
@@ -313,10 +396,10 @@ export class ReactorGraphs {
         ctx.beginPath();
         ctx.moveTo(padding, height - padding);
         
-        for (let i = 0; i < history.length; i++) {
+        for (let i = 0; i < displayData.length; i++) {
             // Position based on actual data points count
-            const x = padding + (i / Math.max(history.length - 1, 1)) * (width - padding * 2);
-            let value = history[i].value;
+            const x = padding + (i / Math.max(displayData.length - 1, 1)) * (width - padding * 2);
+            let value = displayData[i].value;
             
             // Clamp value to range
             value = Math.max(minVal, Math.min(maxVal, value));
@@ -325,7 +408,7 @@ export class ReactorGraphs {
             ctx.lineTo(x, y);
         }
         
-        const lastX = padding + ((history.length - 1) / Math.max(history.length - 1, 1)) * (width - padding * 2);
+        const lastX = padding + ((displayData.length - 1) / Math.max(displayData.length - 1, 1)) * (width - padding * 2);
         ctx.lineTo(lastX, height - padding);
         ctx.closePath();
         ctx.fill();
@@ -335,9 +418,9 @@ export class ReactorGraphs {
         ctx.lineWidth = 2;
         ctx.beginPath();
         
-        for (let i = 0; i < history.length; i++) {
-            const x = padding + (i / Math.max(history.length - 1, 1)) * (width - padding * 2);
-            let value = history[i].value;
+        for (let i = 0; i < displayData.length; i++) {
+            const x = padding + (i / Math.max(displayData.length - 1, 1)) * (width - padding * 2);
+            let value = displayData[i].value;
             value = Math.max(minVal, Math.min(maxVal, value));
             const y = (height - padding) - ((value - minVal) / range) * drawHeight;
             
@@ -351,8 +434,8 @@ export class ReactorGraphs {
         ctx.stroke();
         
         // Draw a dot at the current value
-        if (history.length > 0) {
-            const lastPoint = history[history.length - 1];
+        if (displayData.length > 0) {
+            const lastPoint = displayData[displayData.length - 1];
             const lastValue = Math.max(minVal, Math.min(maxVal, lastPoint.value));
             const lastY = (height - padding) - ((lastValue - minVal) / range) * drawHeight;
             
@@ -422,5 +505,29 @@ export class ReactorGraphs {
         ctx.font = 'bold 12px Consolas, monospace';
         ctx.textAlign = 'right';
         ctx.fillText(`${displayValue} ${config.unit}`, width - 8, 20);
+    }
+    
+    private drawTimeRangeLabel(ctx: CanvasRenderingContext2D, width: number, height: number, dataCount: number): void {
+        // Format time range label
+        let label: string;
+        if (this.currentTimeRange < 60) {
+            label = `${this.currentTimeRange}s`;
+        } else if (this.currentTimeRange < 3600) {
+            label = `${this.currentTimeRange / 60}m`;
+        } else if (this.currentTimeRange < 86400) {
+            label = `${this.currentTimeRange / 3600}h`;
+        } else {
+            label = `${this.currentTimeRange / 86400}d`;
+        }
+        
+        // Draw in bottom-right corner with data count
+        const text = `${label} (${dataCount})`;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(width - 55, height - 20, 50, 15);
+        
+        ctx.fillStyle = '#666';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(text, width - 8, height - 8);
     }
 }
