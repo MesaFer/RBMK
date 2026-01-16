@@ -7,8 +7,8 @@
  * - Control rod positions
  * - Channel status monitoring
  * 
- * Currently a placeholder with single point representation.
- * Will be expanded to show all 1661 fuel channels.
+ * Now supports all 1661 fuel channels with synchronized parameters.
+ * Each channel can display its own temperature/flux values (currently synchronized).
  */
 
 import {
@@ -29,6 +29,23 @@ export interface Reactor2DData {
     avg_coolant_void: number;
 }
 
+/**
+ * Backend fuel channel data structure
+ * Matches the FuelChannel struct from reactor.rs
+ */
+export interface FuelChannelData {
+    id: number;
+    grid_x: number;
+    grid_y: number;
+    x: number;
+    y: number;
+    fuel_temp: number;
+    coolant_temp: number;
+    coolant_void: number;
+    neutron_flux: number;
+    burnup: number;
+}
+
 // Visualization modes for 2D projection
 export type Visualization2DMode = 'power' | 'fuel_temp' | 'coolant_temp' | 'void_fraction' | 'channel_type';
 
@@ -40,7 +57,7 @@ export class Reactor2DProjection {
     // Current visualization mode
     private mode: Visualization2DMode = 'channel_type';
     
-    // Current reactor data (placeholder - single point for now)
+    // Current reactor data (global averages)
     private currentData: Reactor2DData = {
         power_percent: 100,
         avg_fuel_temp: 800,
@@ -48,6 +65,10 @@ export class Reactor2DProjection {
         avg_graphite_temp: 600,
         avg_coolant_void: 0,
     };
+    
+    // Per-channel data from backend (1661 fuel channels)
+    private fuelChannelData: Map<string, FuelChannelData> = new Map();
+    private channelDataLoaded: boolean = false;
     
     // Scale and positioning
     private scale: number = 1;
@@ -181,6 +202,33 @@ export class Reactor2DProjection {
     }
     
     /**
+     * Update fuel channel data from backend
+     * This receives the 1661 fuel channels with their individual parameters
+     * (currently synchronized - all have same values)
+     */
+    public updateFuelChannels(channels: FuelChannelData[]): void {
+        this.fuelChannelData.clear();
+        
+        for (const channel of channels) {
+            // Key by grid position for fast lookup
+            const key = `${channel.grid_x},${channel.grid_y}`;
+            this.fuelChannelData.set(key, channel);
+        }
+        
+        this.channelDataLoaded = channels.length > 0;
+        console.log(`[2D Projection] Updated ${channels.length} fuel channels`);
+        this.render();
+    }
+    
+    /**
+     * Get fuel channel data for a specific grid position
+     */
+    private getFuelChannelData(gridX: number, gridY: number): FuelChannelData | undefined {
+        const key = `${gridX},${gridY}`;
+        return this.fuelChannelData.get(key);
+    }
+    
+    /**
      * Main render function
      */
     public render(): void {
@@ -304,8 +352,33 @@ export class Reactor2DProjection {
             return `rgba(${colors.r * 255}, ${colors.g * 255}, ${colors.b * 255}, 0.8)`;
         }
         
-        // For other modes, use temperature/power coloring
-        // Currently placeholder - will use actual channel data in future
+        // For TK (fuel) channels, use per-channel data if available
+        if (channel.type === 'TK' && this.channelDataLoaded) {
+            const channelData = this.getFuelChannelData(channel.gridX, channel.gridY);
+            
+            if (channelData) {
+                switch (this.mode) {
+                    case 'power':
+                        // Neutron flux normalized (assuming max ~1e14)
+                        const fluxNorm = Math.min(1, channelData.neutron_flux / 1e14);
+                        return this.getHeatmapColor(fluxNorm);
+                    case 'fuel_temp':
+                        // Fuel temperature: 300K (cold) to 1300K (hot)
+                        const fuelTempNorm = (channelData.fuel_temp - 300) / 1000;
+                        return this.getHeatmapColor(fuelTempNorm);
+                    case 'coolant_temp':
+                        // Coolant temperature: 300K to 600K
+                        const coolantTempNorm = (channelData.coolant_temp - 300) / 300;
+                        return this.getHeatmapColor(coolantTempNorm);
+                    case 'void_fraction':
+                        // Void fraction: 0% to 100%
+                        const voidNorm = channelData.coolant_void / 100;
+                        return this.getHeatmapColor(voidNorm);
+                }
+            }
+        }
+        
+        // Fallback: use global averages for non-TK channels or when no data
         const intensity = this.currentData.power_percent / 100;
         
         switch (this.mode) {
@@ -359,10 +432,15 @@ export class Reactor2DProjection {
     }
     
     /**
-     * Draw center point - current single-point representation
-     * This is a placeholder until full 1661 channel support is implemented
+     * Draw center point - shown only when channel data is not loaded
+     * This is a fallback indicator until per-channel data is available
      */
     private drawCenterPoint(): void {
+        // Only show center point when no channel data is loaded
+        if (this.channelDataLoaded) {
+            return;
+        }
+        
         const ctx = this.ctx;
         const pulse = Math.sin(this.pulsePhase) * 0.3 + 0.7;
         
@@ -443,7 +521,7 @@ export class Reactor2DProjection {
     private drawInfoPanel(): void {
         const ctx = this.ctx;
         const panelWidth = 180;
-        const panelHeight = 120;
+        const panelHeight = 135;
         const panelX = this.canvas.width - panelWidth - 15;
         const panelY = 15;
         
@@ -478,10 +556,15 @@ export class Reactor2DProjection {
             y += 16;
         }
         
-        // Placeholder notice
+        // Channel data status
         ctx.font = '10px "Segoe UI", sans-serif';
-        ctx.fillStyle = '#fbbf24';
-        ctx.fillText('⚠ Single-point model', panelX + 10, panelY + panelHeight - 8);
+        if (this.channelDataLoaded) {
+            ctx.fillStyle = '#4ade80';
+            ctx.fillText(`✓ ${this.fuelChannelData.size} channels synced`, panelX + 10, panelY + panelHeight - 8);
+        } else {
+            ctx.fillStyle = '#fbbf24';
+            ctx.fillText('⚠ Waiting for channel data', panelX + 10, panelY + panelHeight - 8);
+        }
     }
     
     /**

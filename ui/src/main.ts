@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ReactorVisualization, Reactor3DData, ControlRod } from './visualization';
 import { ChannelType } from './rbmk_core_layout';
 import { ReactorGraphs } from './graphs';
-import { Reactor2DProjection, Visualization2DMode } from './reactor_2d';
+import { Reactor2DProjection, Visualization2DMode, FuelChannelData } from './reactor_2d';
 
 // Auto regulator settings interface
 interface AutoRegulatorSettings {
@@ -488,10 +488,12 @@ class RBMKSimulator {
     
     /**
      * Update 2D projection with current reactor state
+     * Fetches per-channel data from backend for all 1661 fuel channels
      */
-    private update2DProjection(): void {
+    private async update2DProjection(): Promise<void> {
         if (!this.projection2D || !this.state) return;
         
+        // Update global state data
         this.projection2D.updateData({
             power_percent: this.state.power_percent,
             avg_fuel_temp: this.state.avg_fuel_temp,
@@ -499,6 +501,15 @@ class RBMKSimulator {
             avg_graphite_temp: this.state.avg_graphite_temp,
             avg_coolant_void: this.state.avg_coolant_void,
         });
+        
+        // Fetch per-channel data from backend (1661 fuel channels with synchronized parameters)
+        try {
+            const fuelChannels = await invoke<FuelChannelData[]>('get_fuel_channels');
+            this.projection2D.updateFuelChannels(fuelChannels);
+        } catch (e) {
+            // Backend not available - 2D projection will use global averages
+            console.debug('[2D] Could not fetch fuel channels:', e);
+        }
     }
     
     /**

@@ -2,11 +2,145 @@
 //!
 //! This module contains the reactor state and simulation logic.
 //! All physics calculations are delegated to Fortran via FFI.
+//!
+//! The reactor core consists of 1661 fuel channels (TK cells) arranged
+//! according to the OPB-82 layout configuration. Currently, all channels
+//! have synchronized parameters (no spatial diffusion coupling yet).
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::fs;
+use std::collections::HashMap;
 
 use crate::fortran_ffi;
+
+/// Layout configuration structures for loading OPB-82 layout
+#[derive(Debug, Clone, Deserialize)]
+struct LayoutConfig {
+    metadata: LayoutMetadata,
+    cells: HashMap<String, Vec<CellConfig>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LayoutMetadata {
+    total_cells: usize,
+    grid_size: GridSize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GridSize {
+    width: usize,
+    height: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CellConfig {
+    grid_x: i32,
+    grid_y: i32,
+    #[allow(dead_code)]
+    original_grid_x: i32,
+    #[allow(dead_code)]
+    original_grid_y: i32,
+    #[allow(dead_code)]
+    pixel_x: i32,
+    #[allow(dead_code)]
+    pixel_y: i32,
+    #[allow(dead_code)]
+    area: i32,
+}
+
+/// Grid spacing in cm (graphite block size)
+const GRID_SPACING_CM: f64 = 25.0;
+
+/// Grid center (48x48 grid, center at 24)
+const GRID_CENTER: f64 = 24.0;
+
+/// Load fuel channel positions from the OPB-82 layout config
+fn load_fuel_channels_from_config() -> Vec<FuelChannel> {
+    // Try to load from config file
+    let config_paths = [
+        "config/opb82_layout.json",
+        "../config/opb82_layout.json",
+        "ui/public/config/opb82_layout.json",
+    ];
+    
+    for path in &config_paths {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(config) = serde_json::from_str::<LayoutConfig>(&content) {
+                return create_channels_from_config(&config);
+            }
+        }
+    }
+    
+    // Fallback: generate default circular grid if config not found
+    eprintln!("[reactor] Warning: Could not load layout config, using fallback circular grid");
+    create_fallback_channels()
+}
+
+/// Create fuel channels from loaded config (TK cells only)
+fn create_channels_from_config(config: &LayoutConfig) -> Vec<FuelChannel> {
+    let mut fuel_channels = Vec::new();
+    
+    // Get TK (fuel channel) cells
+    if let Some(tk_cells) = config.cells.get("TK") {
+        for (id, cell) in tk_cells.iter().enumerate() {
+            // Convert grid position to cm from center
+            // Grid is 48x48, center at (24, 24)
+            // Each cell is 25cm
+            let x = (cell.grid_x as f64 - GRID_CENTER + 0.5) * GRID_SPACING_CM;
+            let y = (cell.grid_y as f64 - GRID_CENTER + 0.5) * GRID_SPACING_CM;
+            
+            fuel_channels.push(FuelChannel {
+                id,
+                grid_x: cell.grid_x,
+                grid_y: cell.grid_y,
+                x,
+                y,
+                fuel_temp: 900.0,      // Initial equilibrium values
+                coolant_temp: 550.0,
+                coolant_void: 0.0,
+                neutron_flux: 1.0,
+                burnup: 10.0,
+            });
+        }
+    }
+    
+    println!("[reactor] Loaded {} fuel channels from config", fuel_channels.len());
+    fuel_channels
+}
+
+/// Fallback: create simplified circular grid if config not found
+fn create_fallback_channels() -> Vec<FuelChannel> {
+    let mut fuel_channels = Vec::new();
+    let grid_size = 41;
+    let spacing = 2.0 * constants::CORE_RADIUS_CM / (grid_size as f64);
+    
+    let mut id = 0;
+    for i in 0..grid_size {
+        for j in 0..grid_size {
+            let x = -constants::CORE_RADIUS_CM + spacing * (i as f64 + 0.5);
+            let y = -constants::CORE_RADIUS_CM + spacing * (j as f64 + 0.5);
+            
+            if x*x + y*y <= constants::CORE_RADIUS_CM * constants::CORE_RADIUS_CM {
+                fuel_channels.push(FuelChannel {
+                    id,
+                    grid_x: i as i32,
+                    grid_y: j as i32,
+                    x,
+                    y,
+                    fuel_temp: 900.0,
+                    coolant_temp: 550.0,
+                    coolant_void: 0.0,
+                    neutron_flux: 1.0,
+                    burnup: 10.0,
+                });
+                id += 1;
+            }
+        }
+    }
+    
+    fuel_channels
+}
 
 /// Physical constants for RBMK-1000 (from Fortran)
 pub mod constants {
@@ -23,8 +157,10 @@ pub mod constants {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FuelChannel {
     pub id: usize,
-    pub x: f64,  // Position in core [cm]
-    pub y: f64,
+    pub grid_x: i32,  // Grid position (0-47)
+    pub grid_y: i32,  // Grid position (0-47)
+    pub x: f64,       // Position in core [cm] from center
+    pub y: f64,       // Position in core [cm] from center
     pub fuel_temp: f64,      // [K]
     pub coolant_temp: f64,   // [K]
     pub coolant_void: f64,   // [%]
@@ -228,32 +364,8 @@ impl ReactorSimulator {
             });
         }
         
-        // Initialize fuel channels (simplified grid)
-        let mut fuel_channels = Vec::new();
-        let grid_size = 41;
-        let spacing = 2.0 * constants::CORE_RADIUS_CM / (grid_size as f64);
-        
-        let mut id = 0;
-        for i in 0..grid_size {
-            for j in 0..grid_size {
-                let x = -constants::CORE_RADIUS_CM + spacing * (i as f64 + 0.5);
-                let y = -constants::CORE_RADIUS_CM + spacing * (j as f64 + 0.5);
-                
-                if x*x + y*y <= constants::CORE_RADIUS_CM * constants::CORE_RADIUS_CM {
-                    fuel_channels.push(FuelChannel {
-                        id,
-                        x,
-                        y,
-                        fuel_temp: 900.0,
-                        coolant_temp: 550.0,
-                        coolant_void: 0.0,
-                        neutron_flux: 1.0,
-                        burnup: 10.0,
-                    });
-                    id += 1;
-                }
-            }
-        }
+        // Load fuel channels from OPB-82 layout config (1661 TK cells)
+        let fuel_channels = load_fuel_channels_from_config();
         
         Self {
             state: Mutex::new(ReactorState::default()),
@@ -542,6 +654,30 @@ impl ReactorSimulator {
     
     /// Get fuel channel data
     pub fn get_fuel_channels(&self) -> Vec<FuelChannel> {
+        self.fuel_channels.lock().unwrap().clone()
+    }
+    
+    /// Synchronize all fuel channel parameters from global state
+    /// This ensures all 1661 channels have the same values (no diffusion coupling yet)
+    pub fn synchronize_fuel_channels(&self) {
+        let state = self.state.lock().unwrap();
+        let mut channels = self.fuel_channels.lock().unwrap();
+        
+        // Copy global state values to all channels
+        for channel in channels.iter_mut() {
+            channel.fuel_temp = state.avg_fuel_temp;
+            channel.coolant_temp = state.avg_coolant_temp;
+            channel.coolant_void = state.avg_coolant_void;
+            channel.neutron_flux = state.neutron_population;
+            // burnup is not synchronized - it's a cumulative value per channel
+        }
+    }
+    
+    /// Get fuel channels with synchronized parameters
+    /// This is the main method for getting channel data for visualization
+    pub fn get_fuel_channels_synchronized(&self) -> Vec<FuelChannel> {
+        // First synchronize, then return
+        self.synchronize_fuel_channels();
         self.fuel_channels.lock().unwrap().clone()
     }
     

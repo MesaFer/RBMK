@@ -153,10 +153,11 @@ pub fn get_control_rods(simulator: State<SimulatorState>) -> Vec<ControlRod> {
     simulator.0.get_control_rods()
 }
 
-/// Get fuel channel data
+/// Get fuel channel data with synchronized parameters
+/// All 1661 channels have the same parameters from global state (no diffusion coupling yet)
 #[tauri::command]
 pub fn get_fuel_channels(simulator: State<SimulatorState>) -> Vec<FuelChannel> {
-    simulator.0.get_fuel_channels()
+    simulator.0.get_fuel_channels_synchronized()
 }
 
 /// Set simulation time step
@@ -218,7 +219,7 @@ pub struct Reactor3DData {
 #[tauri::command]
 pub fn get_3d_data(simulator: State<SimulatorState>) -> Reactor3DData {
     let state = simulator.0.get_state();
-    let fuel_channels = simulator.0.get_fuel_channels();
+    let fuel_channels = simulator.0.get_fuel_channels_synchronized();
     let control_rods = simulator.0.get_control_rods();
     
     // Create simplified power distribution grid
