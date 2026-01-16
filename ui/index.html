@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RBMK-1000 Reactor Simulator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+        }
+        
+        #app {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+        
+        #sidebar {
+            width: 350px;
+            background: #16213e;
+            padding: 15px;
+            overflow-y: auto;
+            border-right: 2px solid #0f3460;
+        }
+        
+        #main-view {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+        }
+        
+        #canvas-container {
+            flex: 1 1 auto;
+            position: relative;
+            min-height: 200px;
+            overflow: hidden;
+        }
+        
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            display: block;
+        }
+        
+        #bottom-panel {
+            flex: 0 0 200px;
+            min-height: 200px;
+            max-height: 200px;
+            background: #16213e;
+            border-top: 2px solid #0f3460;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        .panel-section {
+            margin-bottom: 15px;
+        }
+        
+        .panel-title {
+            font-size: 14px;
+            font-weight: bold;
+            color: #e94560;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .parameter-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            padding: 5px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 3px;
+        }
+        
+        .parameter-label {
+            color: #aaa;
+            font-size: 12px;
+        }
+        
+        .parameter-value {
+            font-weight: bold;
+            font-family: 'Consolas', monospace;
+        }
+        
+        .value-normal { color: #4ade80; }
+        .value-warning { color: #fbbf24; }
+        .value-critical { color: #ef4444; }
+        
+        .control-button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 8px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #0f3460;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #1a4a7a;
+        }
+        
+        .btn-danger {
+            background: #e94560;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #ff6b8a;
+        }
+        
+        .btn-success {
+            background: #4ade80;
+            color: #1a1a2e;
+        }
+        
+        .slider-container {
+            margin-bottom: 10px;
+        }
+        
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            -webkit-appearance: none;
+            background: #0f3460;
+            border-radius: 4px;
+            outline: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #e94560;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        
+        #alerts-container {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+        }
+        
+        .alert {
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            font-size: 12px;
+            animation: fadeIn 0.3s;
+        }
+        
+        .alert-warning {
+            background: rgba(251, 191, 36, 0.2);
+            border-left: 4px solid #fbbf24;
+        }
+        
+        .alert-critical {
+            background: rgba(239, 68, 68, 0.2);
+            border-left: 4px solid #ef4444;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        #flux-chart {
+            width: 300px;
+            padding: 15px;
+            border-right: 1px solid #0f3460;
+        }
+        
+        #flux-canvas {
+            width: 100%;
+            height: 100%;
+            background: #0f3460;
+            border-radius: 5px;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-running { background: #4ade80; animation: blink 1s infinite; }
+        .status-stopped { background: #ef4444; }
+        .status-scram { background: #fbbf24; animation: blink 0.5s infinite; }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        #view-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 5px;
+        }
+        
+        .view-btn {
+            padding: 8px 15px;
+            background: rgba(22, 33, 62, 0.9);
+            border: 1px solid #0f3460;
+            color: white;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 12px;
+        }
+        
+        .view-btn:hover, .view-btn.active {
+            background: #e94560;
+        }
+        
+        #transparency-control {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 10px 15px;
+            border-radius: 5px;
+            border: 1px solid #0f3460;
+            min-width: 200px;
+        }
+        
+        #transparency-control .slider-label {
+            color: #aaa;
+            font-size: 11px;
+            margin-bottom: 5px;
+        }
+        
+        #transparency-slider {
+            width: 100%;
+        }
+        
+        #rod-legend {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 10px 15px;
+            border-radius: 5px;
+            border: 1px solid #0f3460;
+        }
+        
+        #rod-legend .panel-title {
+            font-size: 11px;
+            margin-bottom: 8px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+            font-size: 10px;
+        }
+        
+        .legend-color {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            margin-right: 6px;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        
+        .legend-color.tk { background: #d9bf80; }
+        .legend-color.rr { background: #ffffff; }
+        .legend-color.ar { background: #0066ff; }
+        .legend-color.usp { background: #ffd900; }
+        .legend-color.lar { background: #00b3b3; }
+        .legend-color.az { background: #ff0000; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="sidebar">
+            <div class="panel-section">
+                <div class="panel-title">
+                    <span class="status-indicator status-running" id="status-indicator"></span>
+                    Reactor Status
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Power</span>
+                    <span class="parameter-value value-normal" id="power-value">3200 MW (100%)</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">k-effective</span>
+                    <span class="parameter-value value-normal" id="keff-value">1.0000</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Reactivity</span>
+                    <span class="parameter-value value-normal" id="reactivity-value">0.000 Δk/k (0.00$)</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Period</span>
+                    <span class="parameter-value value-normal" id="period-value">∞ s</span>
+                </div>
+            </div>
+            
+            <div class="panel-section">
+                <div class="panel-title">Temperatures</div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Fuel</span>
+                    <span class="parameter-value value-normal" id="fuel-temp">800 K</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Coolant</span>
+                    <span class="parameter-value value-normal" id="coolant-temp">560 K</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Graphite</span>
+                    <span class="parameter-value value-normal" id="graphite-temp">600 K</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Void Fraction</span>
+                    <span class="parameter-value value-normal" id="void-fraction">0.0%</span>
+                </div>
+            </div>
+            
+            <div class="panel-section">
+                <div class="panel-title">Xenon Poisoning</div>
+                <div class="parameter-row">
+                    <span class="parameter-label">Xe-135</span>
+                    <span class="parameter-value" id="xenon-value">3.0e15 at/cm³</span>
+                </div>
+                <div class="parameter-row">
+                    <span class="parameter-label">I-135</span>
+                    <span class="parameter-value" id="iodine-value">1.0e15 at/cm³</span>
+                </div>
+            </div>
+            
+            <div class="panel-section">
+                <div class="panel-title">Control Rods</div>
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Manual Rods (RR)</span>
+                        <span id="manual-rod-pos">80%</span>
+                    </div>
+                    <input type="range" id="manual-rods" min="0" max="100" value="80">
+                </div>
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Automatic Rods (AR/LAR)</span>
+                        <span id="auto-rod-pos">80%</span>
+                    </div>
+                    <input type="range" id="auto-rods" min="0" max="100" value="80">
+                </div>
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Shortened Rods (USP)</span>
+                        <span id="usp-rod-pos">80%</span>
+                    </div>
+                    <input type="range" id="usp-rods" min="0" max="100" value="80">
+                </div>
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Emergency Rods (AZ)</span>
+                        <span id="az-rod-pos">80%</span>
+                    </div>
+                    <input type="range" id="az-rods" min="0" max="100" value="80">
+                </div>
+            </div>
+            
+            <div class="panel-section">
+                <div class="panel-title">Simulation Control</div>
+                <div class="slider-container">
+                    <div class="slider-label">
+                        <span>Time Step</span>
+                        <span id="dt-value">0.1 s</span>
+                    </div>
+                    <input type="range" id="time-step" min="1" max="100" value="10">
+                </div>
+                <button class="control-button btn-primary" id="btn-step">Step (1x)</button>
+                <button class="control-button btn-primary" id="btn-run">Run (10x)</button>
+                <button class="control-button btn-danger" id="btn-scram">⚠ SCRAM (AZ-5)</button>
+                <button class="control-button btn-success" id="btn-reset">Reset Simulation</button>
+            </div>
+        </div>
+        
+        <div id="main-view">
+            <div id="canvas-container">
+                <canvas id="renderCanvas"></canvas>
+                <div id="view-controls">
+                    <button class="view-btn active" data-view="3d">3D View</button>
+                    <button class="view-btn" data-view="top">Top View</button>
+                    <button class="view-btn" data-view="side">Side View</button>
+                </div>
+                
+                <div id="transparency-control">
+                    <div class="slider-label">
+                        <span>Core Transparency</span>
+                        <span id="transparency-value">70%</span>
+                    </div>
+                    <input type="range" id="transparency-slider" min="0" max="100" value="70">
+                </div>
+                
+                <div id="rod-legend">
+                    <div class="panel-title">Channel Types (OPB-82)</div>
+                    <div class="legend-item">
+                        <div class="legend-color tk"></div>
+                        <span>TK (1661) - Fuel Channels</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color az"></div>
+                        <span>AZ (33) - Emergency Rods</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color rr"></div>
+                        <span>RR (146) - Manual Control</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color ar"></div>
+                        <span>AR (8) - Automatic Control</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color lar"></div>
+                        <span>LAR (12) - Local Automatic</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color usp"></div>
+                        <span>USP (24) - Shortened Absorbers</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="bottom-panel">
+                <div id="flux-chart">
+                    <div class="panel-title">Axial Flux Distribution</div>
+                    <canvas id="flux-canvas"></canvas>
+                </div>
+                <div id="alerts-container">
+                    <div class="panel-title">Alerts & Events</div>
+                    <div id="alerts-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
