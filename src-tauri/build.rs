@@ -9,24 +9,47 @@ fn main() {
     // Get the output directory
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let fortran_dir = manifest_dir.join("..").join("fortran");
     
-    // Compile Fortran code to DLL
-    let fortran_src = manifest_dir.join("..").join("fortran").join("rbmk_physics.f90");
+    // List of Fortran source files in compilation order (dependencies first)
+    let fortran_sources = [
+        "rbmk_constants.f90",
+        "rbmk_kinetics.f90",
+        "rbmk_reactivity.f90",
+        "rbmk_thermal.f90",
+        "rbmk_xenon.f90",
+        "rbmk_neutronics.f90",
+        "rbmk_safety.f90",
+        "rbmk_simulation.f90",
+    ];
+    
+    // Rerun if any Fortran file changes
+    for src in &fortran_sources {
+        println!("cargo:rerun-if-changed=../fortran/{}", src);
+    }
+    
     let dll_path = out_dir.join("rbmk_physics.dll");
-    
-    println!("cargo:rerun-if-changed=../fortran/rbmk_physics.f90");
     
     // Use MSYS2 shell to run gfortran (ensures proper DLL loading)
     let msys2_shell = "C:\\msys64\\msys2_shell.cmd";
     
-    // Build the gfortran command to create a shared library (DLL)
-    let fortran_src_str = fortran_src.to_str().unwrap().replace("\\", "/");
+    // Build the list of source files for gfortran
+    let fortran_src_list: Vec<String> = fortran_sources
+        .iter()
+        .map(|src| {
+            let path = fortran_dir.join(src);
+            format!("'{}'", path.to_str().unwrap().replace("\\", "/"))
+        })
+        .collect();
+    
     let dll_path_str = dll_path.to_str().unwrap().replace("\\", "/");
     
-    // Compile to DLL with all dependencies statically linked
+    // Compile all modules to DLL with all dependencies statically linked
+    // Order matters: dependencies must come before modules that use them
     let gfortran_cmd = format!(
-        "gfortran -shared -O3 -static -static-libgfortran -static-libgcc '{}' -o '{}'",
-        fortran_src_str, dll_path_str
+        "gfortran -shared -O3 -static -static-libgfortran -static-libgcc {} -o '{}'",
+        fortran_src_list.join(" "),
+        dll_path_str
     );
     
     println!("cargo:warning=Running: {}", gfortran_cmd);
