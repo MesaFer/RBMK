@@ -104,6 +104,10 @@ export class ReactorVisualization {
     private canvas: HTMLCanvasElement;
     private resizeObserver: ResizeObserver | null = null;
     
+    // Connection lost overlay state
+    private connectionLostOverlay: HTMLDivElement | null = null;
+    private isConnectionLost: boolean = false;
+    
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         this.engine = new Engine(canvas, true, {
@@ -512,6 +516,222 @@ export class ReactorVisualization {
     }
     
     /**
+     * Show "Connection Lost" overlay when steam explosion occurs
+     * This simulates the loss of monitoring systems due to the explosion
+     *
+     * The overlay is displayed over the 3D visualization with:
+     * - Static noise effect (simulating damaged camera/sensors)
+     * - "CONNECTION LOST" text
+     * - Timestamp of when connection was lost
+     */
+    public showConnectionLost(explosionTime: number): void {
+        if (this.isConnectionLost) return; // Already showing
+        
+        this.isConnectionLost = true;
+        
+        // Create overlay container
+        this.connectionLostOverlay = document.createElement('div');
+        this.connectionLostOverlay.id = 'connection-lost-overlay';
+        this.connectionLostOverlay.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                135deg,
+                rgba(20, 20, 30, 0.95) 0%,
+                rgba(10, 10, 15, 0.98) 50%,
+                rgba(20, 20, 30, 0.95) 100%
+            );
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            animation: fadeIn 0.5s ease-out;
+            overflow: hidden;
+        `;
+        
+        // Add static noise effect using CSS
+        const noiseOverlay = document.createElement('div');
+        noiseOverlay.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.15;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            animation: staticNoise 0.1s infinite;
+            pointer-events: none;
+        `;
+        this.connectionLostOverlay.appendChild(noiseOverlay);
+        
+        // Add scanlines effect
+        const scanlines = document.createElement('div');
+        scanlines.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.3) 2px,
+                rgba(0, 0, 0, 0.3) 4px
+            );
+            pointer-events: none;
+            animation: scanlineMove 8s linear infinite;
+        `;
+        this.connectionLostOverlay.appendChild(scanlines);
+        
+        // Create main content container
+        const contentContainer = document.createElement('div');
+        contentContainer.style.cssText = `
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            padding: 40px;
+        `;
+        
+        // Warning icon (radiation symbol using Unicode)
+        const warningIcon = document.createElement('div');
+        warningIcon.innerHTML = '☢';
+        warningIcon.style.cssText = `
+            font-size: 80px;
+            color: #ff4444;
+            text-shadow: 0 0 20px rgba(255, 68, 68, 0.8), 0 0 40px rgba(255, 68, 68, 0.4);
+            margin-bottom: 20px;
+            animation: pulse 1.5s ease-in-out infinite;
+        `;
+        contentContainer.appendChild(warningIcon);
+        
+        // Main "CONNECTION LOST" text
+        const mainText = document.createElement('div');
+        mainText.textContent = 'CONNECTION LOST';
+        mainText.style.cssText = `
+            font-family: 'Courier New', monospace;
+            font-size: 48px;
+            font-weight: bold;
+            color: #ff4444;
+            text-shadow: 0 0 10px rgba(255, 68, 68, 0.8), 0 0 20px rgba(255, 68, 68, 0.4);
+            letter-spacing: 8px;
+            margin-bottom: 20px;
+            animation: textGlitch 2s infinite;
+        `;
+        contentContainer.appendChild(mainText);
+        
+        // Subtext with explosion info
+        const subText = document.createElement('div');
+        subText.innerHTML = `
+            <div style="color: #888; font-family: 'Courier New', monospace; font-size: 14px; margin-bottom: 10px;">
+                REACTOR MONITORING SYSTEM
+            </div>
+            <div style="color: #ff6666; font-family: 'Courier New', monospace; font-size: 16px; margin-bottom: 5px;">
+                ▸ STEAM EXPLOSION DETECTED
+            </div>
+            <div style="color: #ff6666; font-family: 'Courier New', monospace; font-size: 16px; margin-bottom: 5px;">
+                ▸ CORE INTEGRITY COMPROMISED
+            </div>
+            <div style="color: #ff6666; font-family: 'Courier New', monospace; font-size: 16px; margin-bottom: 20px;">
+                ▸ SENSOR ARRAY OFFLINE
+            </div>
+            <div style="color: #666; font-family: 'Courier New', monospace; font-size: 12px;">
+                Last signal received at T+${explosionTime.toFixed(1)}s
+            </div>
+        `;
+        contentContainer.appendChild(subText);
+        
+        this.connectionLostOverlay.appendChild(contentContainer);
+        
+        // Add CSS animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            @keyframes pulse {
+                0%, 100% { transform: scale(1); opacity: 1; }
+                50% { transform: scale(1.1); opacity: 0.8; }
+            }
+            @keyframes textGlitch {
+                0%, 90%, 100% { transform: translate(0); }
+                92% { transform: translate(-2px, 1px); }
+                94% { transform: translate(2px, -1px); }
+                96% { transform: translate(-1px, 2px); }
+                98% { transform: translate(1px, -2px); }
+            }
+            @keyframes staticNoise {
+                0% { transform: translate(0, 0); }
+                10% { transform: translate(-1%, -1%); }
+                20% { transform: translate(1%, 1%); }
+                30% { transform: translate(-1%, 1%); }
+                40% { transform: translate(1%, -1%); }
+                50% { transform: translate(-1%, 0); }
+                60% { transform: translate(1%, 0); }
+                70% { transform: translate(0, 1%); }
+                80% { transform: translate(0, -1%); }
+                90% { transform: translate(1%, 1%); }
+                100% { transform: translate(0, 0); }
+            }
+            @keyframes scanlineMove {
+                0% { transform: translateY(0); }
+                100% { transform: translateY(4px); }
+            }
+        `;
+        this.connectionLostOverlay.appendChild(style);
+        
+        // Insert overlay into canvas container
+        const container = this.canvas.parentElement;
+        if (container) {
+            container.style.position = 'relative';
+            container.appendChild(this.connectionLostOverlay);
+        }
+    }
+    
+    /**
+     * Hide the "Connection Lost" overlay
+     * Called when simulation is reset
+     */
+    public hideConnectionLost(): void {
+        if (!this.isConnectionLost || !this.connectionLostOverlay) return;
+        
+        this.isConnectionLost = false;
+        
+        // Fade out animation
+        this.connectionLostOverlay.style.animation = 'fadeOut 0.3s ease-out forwards';
+        
+        // Add fadeOut keyframes if not present
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes fadeOut {
+                from { opacity: 1; }
+                to { opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Remove after animation
+        setTimeout(() => {
+            if (this.connectionLostOverlay && this.connectionLostOverlay.parentElement) {
+                this.connectionLostOverlay.parentElement.removeChild(this.connectionLostOverlay);
+            }
+            this.connectionLostOverlay = null;
+        }, 300);
+    }
+    
+    /**
+     * Check if connection lost overlay is currently shown
+     */
+    public isShowingConnectionLost(): boolean {
+        return this.isConnectionLost;
+    }
+    
+    /**
      * Dispose of all resources
      */
     public dispose(): void {
@@ -519,6 +739,7 @@ export class ReactorVisualization {
             this.resizeObserver.disconnect();
             this.resizeObserver = null;
         }
+        this.hideConnectionLost();
         this.scene.dispose();
         this.engine.dispose();
     }

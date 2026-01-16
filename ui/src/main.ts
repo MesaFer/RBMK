@@ -30,6 +30,9 @@ interface ReactorState {
     scram_time: number;
     axial_flux: number[];
     alerts: string[];
+    // Steam explosion state - based on physics simulation
+    explosion_occurred: boolean;
+    explosion_time: number;
 }
 
 interface SimulationResponse {
@@ -290,6 +293,9 @@ class RBMKSimulator {
         
         // Update 3D visualization
         this.update3D();
+        
+        // Check for steam explosion - show "Connection Lost" overlay
+        this.checkExplosionState();
     }
     
     private getValueClass(value: number, warningThreshold: number, criticalThreshold: number): string {
@@ -483,6 +489,9 @@ class RBMKSimulator {
         if (this.isPlaying) {
             this.pauseSimulation();
         }
+        
+        // Hide connection lost overlay if shown
+        this.visualization?.hideConnectionLost();
         
         // Reset simulation time to 12:00:00
         this.simulationTime = 12 * 3600;
@@ -796,6 +805,36 @@ class RBMKSimulator {
         
         // Throttled 3D update
         this.update3D();
+        
+        // Check for steam explosion - show "Connection Lost" overlay
+        this.checkExplosionState();
+    }
+    
+    /**
+     * Check if a steam explosion has occurred and show the "Connection Lost" overlay
+     * This is based on physics simulation - not hardcoded conditions
+     */
+    private checkExplosionState(): void {
+        if (!this.state || !this.visualization) return;
+        
+        // If explosion occurred and overlay not yet shown, show it
+        if (this.state.explosion_occurred && !this.visualization.isShowingConnectionLost()) {
+            console.log('[RBMK] Steam explosion detected! Showing connection lost overlay.');
+            this.visualization.showConnectionLost(this.state.explosion_time);
+            
+            // Pause the simulation - the reactor is destroyed
+            this.pauseSimulation();
+            
+            // Add final alert
+            const alertsList = document.getElementById('alerts-list');
+            if (alertsList) {
+                const alertEl = document.createElement('div');
+                alertEl.className = 'alert alert-critical';
+                alertEl.style.cssText = 'background: #ff0000; color: white; font-weight: bold;';
+                alertEl.textContent = `[${this.formatSimulationTime()}] ☢ CATASTROPHIC FAILURE - ALL MONITORING SYSTEMS OFFLINE`;
+                alertsList.insertBefore(alertEl, alertsList.firstChild);
+            }
+        }
     }
     
     // Mock data for development without Tauri backend
@@ -824,6 +863,8 @@ class RBMKSimulator {
                 Math.cos(Math.PI * (i - 25) / 50) * (i > 5 && i < 45 ? 1 : 0)
             ),
             alerts: [],
+            explosion_occurred: false,
+            explosion_time: 0,
         };
     }
     
