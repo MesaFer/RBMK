@@ -179,13 +179,23 @@ impl ReactorSimulator {
                 (RodType::Manual, 0.15)     // RR - 15% extracted (mostly inserted)
             };
             
+            // Rod worth varies by type - emergency rods have higher worth
+            let worth = match rod_type {
+                RodType::Emergency => 0.002,   // AZ rods: ~0.2% each, 24 rods = 4.8% total
+                RodType::Automatic => 0.001,   // AR/LAR: ~0.1% each, 24 rods = 2.4% total
+                RodType::Shortened => 0.0008,  // USP: ~0.08% each, 24 rods = 1.9% total
+                RodType::Manual => 0.0006,     // RR: ~0.06% each, 139 rods = 8.3% total
+            };
+            // Total rod worth when all inserted: ~17.4%
+            // This ensures deep subcriticality during SCRAM
+            
             control_rods.push(ControlRod {
                 id: i,
                 x: radius * angle.cos(),
                 y: radius * angle.sin(),
                 position,
                 rod_type,
-                worth: 0.0005, // Individual rod worth ~0.05% each, total ~10.5%
+                worth,
             });
         }
         
@@ -248,47 +258,59 @@ impl ReactorSimulator {
             })
             .sum();
         
-        // Handle SCRAM - rods drop in
-        let scram_reactivity = if state.scram_active {
+        // Handle SCRAM timing (rods are physically moved in scram() function)
+        // This just tracks the time since SCRAM for display purposes
+        if state.scram_active {
             state.scram_time += dt;
-            // SCRAM inserts negative reactivity as rods drop
-            let scram_worth = 0.08; // Total SCRAM worth ~8% Δk/k
-            let insertion_fraction = (1.0 - (-3.0 * state.scram_time / 2.5).exp()).min(1.0);
-            -scram_worth * insertion_fraction
-        } else {
-            0.0
-        };
+        }
+        
+        // Note: scram_reactivity is no longer needed as a separate term
+        // because the rods are physically inserted in the scram() function,
+        // and their worth is already calculated in rod_reactivity below.
+        // The old code added scram_reactivity on top of rod_reactivity,
+        // which caused double-counting when rods were also moved via UI.
         
         // Calculate reactivity from various sources
         // At equilibrium with startup rod positions, total reactivity should be ~0
         
         // 1. Base excess reactivity (reactor is supercritical without rods)
         // Rod positions at startup:
-        // - Emergency (24 rods): 100% extracted = 0% insertion
-        // - Automatic (24 rods): 25% extracted = 75% insertion
-        // - Shortened (24 rods): 55% extracted = 45% insertion
-        // - Manual (139 rods): 15% extracted = 85% insertion
-        // Total rod worth inserted = 24*0.0005*0 + 24*0.0005*0.75 + 24*0.0005*0.45 + 139*0.0005*0.85
-        //                          = 0 + 0.009 + 0.0054 + 0.059075 = 0.073575
-        // So base reactivity should balance this
-        let base_reactivity = 0.0736;
+        // - Emergency (24 rods): 100% extracted = 0% insertion → 0 worth
+        // - Automatic (24 rods): 25% extracted = 75% insertion → 24 × 0.001 × 0.75 = 0.018
+        // - Shortened (24 rods): 55% extracted = 45% insertion → 24 × 0.0008 × 0.45 = 0.00864
+        // - Manual (139 rods): 15% extracted = 85% insertion → 139 × 0.0006 × 0.85 = 0.0709
+        // Total rod worth at startup = 0.018 + 0.00864 + 0.0709 = 0.0975
+        // So base reactivity should balance this for criticality
+        let base_reactivity = 0.0975;
         
         // 2. Temperature feedback (Doppler effect - STRONG negative feedback)
         // This is the primary stabilizing mechanism
         // At reference temp (900K at 100% power), this is zero
+        // IMPORTANT: Doppler feedback only provides NEGATIVE reactivity when temp > ref
+        // When temp < ref, we limit the positive contribution to prevent
+        // the reactor from stabilizing at low power instead of shutting down
         let ref_fuel_temp = 900.0;
         // Doppler coefficient: -2e-5 to -5e-5 per K is realistic for RBMK
         let alpha_fuel = -5.0e-5; // Fuel temperature coefficient [1/K]
-        let fuel_temp_reactivity = alpha_fuel * (state.avg_fuel_temp - ref_fuel_temp);
+        let fuel_temp_reactivity = if state.avg_fuel_temp > ref_fuel_temp {
+            // Normal Doppler feedback - negative when hot
+            alpha_fuel * (state.avg_fuel_temp - ref_fuel_temp)
+        } else {
+            // Limit positive feedback when cold - reactor should still shut down
+            // Real reactors have other mechanisms that prevent restart at low temp
+            (alpha_fuel * (state.avg_fuel_temp - ref_fuel_temp)).min(0.005) // Max +0.5% from cold fuel
+        };
         
         // 3. Graphite temperature coefficient (POSITIVE in RBMK!)
         // Graphite acts as moderator - when it heats up, moderation improves slightly
         // This is a delayed positive feedback due to graphite's large thermal mass
         // Reference temperature at 100% power is 650K
+        // When cold, graphite provides NEGATIVE reactivity (less moderation)
         let ref_graphite_temp = 650.0;
         // Positive coefficient: ~+1e-5 per K (smaller than fuel Doppler, but positive)
         let alpha_graphite = 1.0e-5; // Graphite temperature coefficient [1/K] - POSITIVE
         let graphite_temp_reactivity = alpha_graphite * (state.avg_graphite_temp - ref_graphite_temp);
+        // Note: When graphite is cold (below ref), this gives NEGATIVE reactivity, which is correct
         
         // 4. Void coefficient (POSITIVE in RBMK - this is the dangerous part!)
         // At 0% void, this is zero
@@ -298,10 +320,11 @@ impl ReactorSimulator {
         let alpha_void = 4.5 * constants::BETA_EFF / 100.0; // ~0.00029 per % void
         let void_reactivity = alpha_void * state.avg_coolant_void;
         
-        // 5. Power coefficient (additional negative feedback)
-        // This represents various power-dependent effects not captured above
-        let alpha_power = -1.0e-4; // Power coefficient [1/% power]
-        let power_reactivity = alpha_power * (state.power_percent - 100.0);
+        // 5. Power coefficient - REMOVED
+        // The power coefficient was incorrectly adding positive reactivity at low power,
+        // which prevented the reactor from shutting down properly.
+        // Temperature feedback (Doppler) already provides the necessary power-dependent feedback.
+        let power_reactivity = 0.0;
         
         // 6. Xenon poisoning (negative)
         // Xe-135 has huge absorption cross-section, causes significant negative reactivity
@@ -312,21 +335,26 @@ impl ReactorSimulator {
         
         // Calculate target reactivity (before smoothing)
         // Note: At equilibrium (100% power, 900K fuel, 650K graphite, 0% void):
-        // - base_reactivity = +0.0736
+        // - base_reactivity = +0.0975
         // - fuel_temp_reactivity = 0 (at reference)
         // - graphite_temp_reactivity = 0 (at reference)
         // - void_reactivity = 0 (no void)
         // - power_reactivity = 0 (at 100%)
         // - xe_reactivity ≈ -0.003 (equilibrium Xe)
-        // - rod_reactivity ≈ -0.0736 (balanced by rods)
+        // - rod_reactivity ≈ -0.0975 (balanced by rods at startup positions)
         // Total ≈ 0 (critical)
+        //
+        // During SCRAM: all rods are fully inserted (position = 0), so rod_reactivity
+        // = -(24×0.002 + 24×0.001 + 24×0.0008 + 139×0.0006) = -0.175
+        // This gives total reactivity of about -7.5% = -11.5$ (deeply subcritical)
         let target_reactivity = base_reactivity + fuel_temp_reactivity + graphite_temp_reactivity
                                + void_reactivity + power_reactivity + xe_reactivity
-                               + rod_reactivity + scram_reactivity;
+                               + rod_reactivity;
         
         // Apply exponential smoothing to reactivity changes for numerical stability
         // This simulates the physical reality that reactivity changes are not instantaneous
-        let reactivity_smoothing_tau = 0.3; // seconds - faster response
+        // During SCRAM, use much faster response to reflect rapid rod insertion
+        let reactivity_smoothing_tau = if state.scram_active { 0.05 } else { 0.3 }; // seconds
         let smoothing_alpha = (dt / reactivity_smoothing_tau).min(1.0);
         state.smoothed_reactivity += smoothing_alpha * (target_reactivity - state.smoothed_reactivity);
         
@@ -354,51 +382,87 @@ impl ReactorSimulator {
         let beta = constants::BETA_EFF;
         let lifetime = constants::NEUTRON_LIFETIME;
         
+        // For strongly negative reactivity (SCRAM), use smaller time steps for stability
+        // The point kinetics equations become stiff when |rho| >> beta
+        let effective_dt = if rho < -0.01 {
+            // Use sub-stepping for numerical stability during SCRAM
+            dt.min(0.01) // Max 10ms steps when deeply subcritical
+        } else {
+            dt
+        };
+        let num_substeps = (dt / effective_dt).ceil() as usize;
+        let substep_dt = dt / (num_substeps as f64);
+        
         // RK4 derivatives function with reactivity feedback
-        let derivatives = |n: f64, c: f64, fuel_temp: f64| -> (f64, f64, f64) {
-            // Dynamic temperature feedback during integration
-            let temp_feedback = alpha_fuel * (fuel_temp - ref_fuel_temp);
-            let effective_rho = (rho + temp_feedback).clamp(-0.10, 0.02);
+        let derivatives = |n: f64, c: f64, fuel_temp: f64, current_rho: f64| -> (f64, f64, f64) {
+            // For deeply subcritical reactor, temperature feedback is minimal
+            // because the reactor is shutting down regardless of temperature
+            let temp_feedback = if current_rho < -0.01 {
+                0.0 // Ignore temperature feedback during shutdown
+            } else {
+                let feedback = alpha_fuel * (fuel_temp - ref_fuel_temp);
+                if fuel_temp < ref_fuel_temp {
+                    feedback.min(0.005) // Limit positive feedback from cold fuel
+                } else {
+                    feedback
+                }
+            };
+            let effective_rho = (current_rho + temp_feedback).clamp(-0.15, 0.02);
             
+            // Point kinetics equations
+            // dn/dt = (ρ - β) / Λ * n + λ * C
+            // dC/dt = β / Λ * n - λ * C
             let dn_dt = ((effective_rho - beta) / lifetime) * n + lambda * c;
             let dc_dt = (beta / lifetime) * n - lambda * c;
             
-            // Temperature rises with power
+            // Temperature changes with power - cooling when power drops
             let power_frac = n.clamp(0.0, 10.0);
             let target_temp = 400.0 + 500.0 * power_frac;
-            let dtemp_dt = (target_temp - fuel_temp) / 2.0; // Fast thermal response
+            let dtemp_dt = (target_temp - fuel_temp) / 2.0;
             
             (dn_dt, dc_dt, dtemp_dt)
         };
         
+        // Initialize state for sub-stepping
+        let mut n_current = state.neutron_population;
+        let mut c_current = state.precursors;
+        let mut t_current = state.avg_fuel_temp;
+        
+        // Run sub-steps for numerical stability
+        for _ in 0..num_substeps {
+            // RK4 stages with coupled temperature feedback
+            let (k1_n, k1_c, k1_t) = derivatives(n_current, c_current, t_current, rho);
+            let (k2_n, k2_c, k2_t) = derivatives(
+                n_current + 0.5 * substep_dt * k1_n,
+                c_current + 0.5 * substep_dt * k1_c,
+                t_current + 0.5 * substep_dt * k1_t,
+                rho
+            );
+            let (k3_n, k3_c, k3_t) = derivatives(
+                n_current + 0.5 * substep_dt * k2_n,
+                c_current + 0.5 * substep_dt * k2_c,
+                t_current + 0.5 * substep_dt * k2_t,
+                rho
+            );
+            let (k4_n, k4_c, k4_t) = derivatives(
+                n_current + substep_dt * k3_n,
+                c_current + substep_dt * k3_c,
+                t_current + substep_dt * k3_t,
+                rho
+            );
+            
+            // RK4 update
+            n_current = (n_current + (substep_dt / 6.0) * (k1_n + 2.0 * k2_n + 2.0 * k3_n + k4_n))
+                .clamp(1e-10, 10.0);
+            c_current = (c_current + (substep_dt / 6.0) * (k1_c + 2.0 * k2_c + 2.0 * k3_c + k4_c))
+                .max(0.0);
+            t_current = t_current + (substep_dt / 6.0) * (k1_t + 2.0 * k2_t + 2.0 * k3_t + k4_t);
+        }
+        
+        let n_new = n_current;
+        let c_new = c_current;
+        let t_new = t_current;
         let n0 = state.neutron_population;
-        let c0 = state.precursors;
-        let t0 = state.avg_fuel_temp;
-        
-        // RK4 stages with coupled temperature feedback
-        let (k1_n, k1_c, k1_t) = derivatives(n0, c0, t0);
-        let (k2_n, k2_c, k2_t) = derivatives(
-            n0 + 0.5 * dt * k1_n,
-            c0 + 0.5 * dt * k1_c,
-            t0 + 0.5 * dt * k1_t
-        );
-        let (k3_n, k3_c, k3_t) = derivatives(
-            n0 + 0.5 * dt * k2_n,
-            c0 + 0.5 * dt * k2_c,
-            t0 + 0.5 * dt * k2_t
-        );
-        let (k4_n, k4_c, k4_t) = derivatives(
-            n0 + dt * k3_n,
-            c0 + dt * k3_c,
-            t0 + dt * k3_t
-        );
-        
-        // RK4 update with bounds
-        let n_new = (n0 + (dt / 6.0) * (k1_n + 2.0 * k2_n + 2.0 * k3_n + k4_n))
-            .clamp(1e-10, 10.0); // Limit neutron population to 0-1000% power
-        let c_new = (c0 + (dt / 6.0) * (k1_c + 2.0 * k2_c + 2.0 * k3_c + k4_c))
-            .max(0.0);
-        let t_new = t0 + (dt / 6.0) * (k1_t + 2.0 * k2_t + 2.0 * k3_t + k4_t);
         
         // Calculate reactor period from the actual rate of change
         let dn_dt_actual = (n_new - n0) / dt;
@@ -412,12 +476,13 @@ impl ReactorSimulator {
             state.period = f64::INFINITY;
         }
         
-        state.neutron_population = n_new;
-        state.precursors = c_new;
+        state.neutron_population = n_new.max(0.0);
+        state.precursors = c_new.max(0.0);
         
         // Calculate power (proportional to neutron population)
-        state.power_mw = constants::NOMINAL_POWER_MW * state.neutron_population;
-        state.power_percent = state.power_mw / constants::NOMINAL_POWER_MW * 100.0;
+        // Power cannot be negative
+        state.power_mw = (constants::NOMINAL_POWER_MW * state.neutron_population).max(0.0);
+        state.power_percent = (state.power_mw / constants::NOMINAL_POWER_MW * 100.0).max(0.0);
         
         // Update temperatures based on power (simplified thermal model)
         // Use the RK4 calculated temperature for fuel
@@ -530,7 +595,9 @@ impl ReactorSimulator {
         // - Fuel fragmented and contacted water → steam explosion
         //
         // We detect explosion based on these physics conditions:
-        if !state.explosion_occurred {
+        // IMPORTANT: Explosion cannot occur if reactivity is strongly negative
+        // (reactor is shutting down, not running away)
+        if !state.explosion_occurred && state.reactivity_dollars > -5.0 {
             // Physical constants for explosion detection
             const FUEL_MELTING_POINT: f64 = 2800.0;  // K - UO2 melting temperature
             const CRITICAL_VOID_FRACTION: f64 = 75.0; // % - near-complete voiding
@@ -567,6 +634,7 @@ impl ReactorSimulator {
             
             // Condition 3: Prompt supercritical condition
             // Reactivity > 1$ means power rises on prompt neutron timescale (microseconds)
+            // This ONLY applies when reactivity is POSITIVE - negative reactivity cannot cause explosion
             if state.reactivity_dollars > PROMPT_SUPERCRITICAL {
                 let supercritical_excess = (state.reactivity_dollars - PROMPT_SUPERCRITICAL) / 2.0;
                 explosion_severity += supercritical_excess.min(1.0);
@@ -575,7 +643,9 @@ impl ReactorSimulator {
             
             // Condition 4: Extreme power excursion
             // Power > 300% indicates runaway reaction
-            if state.power_percent > EXTREME_POWER_FACTOR * 100.0 {
+            // This ONLY counts if reactivity is positive (power is actually increasing uncontrollably)
+            // During SCRAM, power may briefly spike but will decrease due to negative reactivity
+            if state.power_percent > EXTREME_POWER_FACTOR * 100.0 && state.reactivity_dollars > 0.0 {
                 let power_excess = (state.power_percent - EXTREME_POWER_FACTOR * 100.0) / 200.0;
                 explosion_severity += power_excess.min(1.0);
             }
@@ -604,12 +674,35 @@ impl ReactorSimulator {
     }
     
     /// Initiate emergency SCRAM
+    /// This drops all control rods into the core for emergency shutdown
     pub fn scram(&self) {
+        // Physically insert all control rods to position 0 (fully inserted)
+        // This is what happens during a real SCRAM - all rods drop by gravity
+        // We do this FIRST to calculate the new reactivity
+        let total_rod_worth: f64 = {
+            let mut rods = self.control_rods.lock().unwrap();
+            let mut worth = 0.0;
+            for rod in rods.iter_mut() {
+                rod.position = 0.0;
+                worth += rod.worth; // All rods fully inserted = full worth
+            }
+            worth
+        };
+        
+        // Now update state with immediate reactivity change
         let mut state = self.state.lock().unwrap();
         if !state.scram_active {
             state.scram_active = true;
             state.scram_time = 0.0;
             state.alerts.push("SCRAM INITIATED!".to_string());
+            
+            // Immediately apply the negative reactivity from rod insertion
+            // This prevents the delay that was causing power spikes
+            // base_reactivity = 0.0975, with all rods in: rod_reactivity = -total_rod_worth
+            let new_reactivity = 0.0975 - total_rod_worth;
+            state.smoothed_reactivity = new_reactivity;
+            state.reactivity = new_reactivity;
+            state.reactivity_dollars = new_reactivity / constants::BETA_EFF;
         }
     }
     
