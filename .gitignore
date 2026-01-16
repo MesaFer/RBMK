@@ -87,3 +87,4 @@ logs/
 *.tmp
 *.temp
 .cache/
+PROJECT_COMPLEXITY_ANALYSIS.md
