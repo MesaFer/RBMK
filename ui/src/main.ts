@@ -67,7 +67,7 @@ class RBMKSimulator {
     
     // Real-time simulation properties
     private simulationTime: number = 12 * 3600; // Start at 12:00:00 (in seconds from midnight)
-    private timeSpeed: number = 1; // Time multiplier (0.1, 0.2, 0.5, 1, 2, 5, 10)
+    private timeSpeed: number = 1; // Time multiplier (0.1, 0.5, 1, 5, 10, 100, 500, 1000)
     private isPlaying: boolean = false;
     private lastRealTime: number = 0;
     private simulationLoopId: number | null = null;
