@@ -42,12 +42,61 @@ pub fn simulation_step(simulator: State<SimulatorState>) -> SimulationResponse {
     }
 }
 
-/// Run multiple simulation steps
+/// Run multiple simulation steps (legacy, without time speed)
 #[tauri::command]
 pub fn simulation_run(simulator: State<SimulatorState>, steps: usize) -> SimulationResponse {
     for _ in 0..steps {
         simulator.0.step();
     }
+    
+    SimulationResponse {
+        state: simulator.0.get_state(),
+        control_rods: simulator.0.get_control_rods(),
+    }
+}
+
+/// Accumulated simulation time for fractional steps
+static ACCUMULATED_SIM_TIME: std::sync::Mutex<f64> = std::sync::Mutex::new(0.0);
+
+/// Run real-time simulation
+/// Takes delta_real_time (seconds since last call) and time_speed multiplier
+/// Backend calculates how many physics steps to run based on these parameters
+#[tauri::command(rename_all = "camelCase")]
+pub fn simulation_realtime(
+    simulator: State<SimulatorState>,
+    delta_real_time: f64,
+    time_speed: f64
+) -> SimulationResponse {
+    // Get current dt from state
+    let dt = {
+        let state = simulator.0.state.lock().unwrap();
+        state.dt
+    };
+    
+    // Calculate simulation time to advance
+    // At time_speed=1, 1 second of real time = 1 second of simulation time
+    // At time_speed=10, 1 second of real time = 10 seconds of simulation time
+    let sim_time_delta = delta_real_time * time_speed;
+    
+    // Accumulate simulation time to handle fractional steps
+    // This ensures that at low speeds we don't always run 1 step
+    let mut accumulated = ACCUMULATED_SIM_TIME.lock().unwrap();
+    *accumulated += sim_time_delta;
+    
+    // Calculate number of complete steps we can run
+    let steps_to_run = (*accumulated / dt).floor() as usize;
+    
+    // Subtract the time we're about to simulate
+    *accumulated -= (steps_to_run as f64) * dt;
+    
+    // Clamp to reasonable range
+    let steps_to_run = steps_to_run.min(1000);
+    
+    // Run the physics steps
+    for _ in 0..steps_to_run {
+        simulator.0.step();
+    }
+    
     SimulationResponse {
         state: simulator.0.get_state(),
         control_rods: simulator.0.get_control_rods(),

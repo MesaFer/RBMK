@@ -588,7 +588,7 @@ class RBMKSimulator {
      */
     private setTimeSpeed(speed: number): void {
         this.timeSpeed = speed;
-        console.log(`Time speed set to ${speed}x`);
+        console.log(`[RBMK] Time speed set to ${speed}x`);
     }
     
     /**
@@ -665,7 +665,7 @@ class RBMKSimulator {
         const deltaRealTime = (currentTime - this.lastRealTime) / 1000; // Convert to seconds
         this.lastRealTime = currentTime;
         
-        // Calculate simulation time advancement
+        // Calculate simulation time advancement (scaled by timeSpeed for display)
         const simTimeDelta = deltaRealTime * this.timeSpeed;
         this.simulationTime += simTimeDelta;
         
@@ -677,23 +677,19 @@ class RBMKSimulator {
         // Update time display
         this.updateTimeDisplay();
         
-        // Determine how many physics steps to run based on time delta
-        // We want to run physics at a reasonable rate (e.g., 10 Hz minimum)
-        const physicsStepsPerSecond = 10;
-        const stepsToRun = Math.max(1, Math.round(simTimeDelta * physicsStepsPerSecond));
-        
-        // Run physics simulation
-        this.runPhysicsSteps(stepsToRun);
+        // Run physics simulation - backend handles all timing calculations
+        this.runPhysicsRealtime(deltaRealTime);
         
         // Schedule next frame
         this.simulationLoopId = requestAnimationFrame(() => this.simulationLoop());
     }
     
     /**
-     * Run physics simulation steps
+     * Run real-time physics simulation
+     * Backend calculates how many steps to run based on delta time and time speed
      * Protected against overlapping calls to prevent lag accumulation
      */
-    private async runPhysicsSteps(steps: number): Promise<void> {
+    private async runPhysicsRealtime(deltaRealTime: number): Promise<void> {
         // Prevent overlapping physics calls
         if (this.isPhysicsRunning) {
             return;
@@ -702,13 +698,20 @@ class RBMKSimulator {
         this.isPhysicsRunning = true;
         
         try {
-            const response = await invoke<SimulationResponse>('simulation_run', { steps });
+            // Backend handles all timing calculations
+            // Use camelCase for Tauri 2.0 - it auto-converts to snake_case for Rust
+            console.log(`[RBMK] Calling simulation_realtime: deltaRealTime=${deltaRealTime.toFixed(4)}, timeSpeed=${this.timeSpeed}`);
+            const response = await invoke<SimulationResponse>('simulation_realtime', {
+                deltaRealTime: deltaRealTime,
+                timeSpeed: this.timeSpeed
+            });
             this.state = response.state;
             this.updateUIFast();
         } catch (e) {
+            console.error('[RBMK] Physics simulation error:', e);
             // Mock physics for development
             if (this.state) {
-                this.state.time += this.state.dt * steps;
+                this.state.time += deltaRealTime * this.timeSpeed;
                 this.updateUIFast();
             }
         } finally {

@@ -23,6 +23,7 @@ fn main() {
             get_reactor_state,
             simulation_step,
             simulation_run,
+            simulation_realtime,
             scram,
             reset_scram,
             move_control_rod,
