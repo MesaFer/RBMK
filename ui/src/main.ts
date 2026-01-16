@@ -83,41 +83,49 @@ class RBMKSimulator {
     }
     
     private async initialize(): Promise<void> {
-        // Initialize 3D visualization
+        // Initialize 3D visualization (async - loads layout config from JSON)
         const canvas = document.getElementById('renderCanvas') as HTMLCanvasElement;
         if (canvas) {
-            this.visualization = new ReactorVisualization(canvas);
-            
-            // Get initial 3D data and initialize reactor geometry
             try {
-                const data = await invoke<Reactor3DData>('get_3d_data');
-                this.visualization.initializeReactor(data);
+                this.visualization = await ReactorVisualization.create(canvas);
+                
+                // Get initial 3D data and initialize reactor geometry
+                try {
+                    const data = await invoke<Reactor3DData>('get_3d_data');
+                    this.visualization.initializeReactor(data);
+                } catch (e) {
+                    console.error('Failed to get 3D data:', e);
+                    // Use mock data for development
+                    this.visualization.initializeReactor(this.getMockData());
+                }
+                
+                // Set initial rod positions in 3D visualization to match startup defaults
+                // AZ (Emergency): 100% extracted - ready to drop for safety
+                // RR (Manual): 15% - main control rods for startup
+                // AR/LAR (Automatic): 25% - automatic regulation with headroom
+                // USP (Shortened): 55% - axial flux shaping
+                this.visualization.setRodPosition('RR' as ChannelType, 0.15);
+                this.visualization.setRodPosition('AR' as ChannelType, 0.25);
+                this.visualization.setRodPosition('LAR' as ChannelType, 0.25);
+                this.visualization.setRodPosition('USP' as ChannelType, 0.55);
+                this.visualization.setRodPosition('AZ' as ChannelType, 1.0);
             } catch (e) {
-                console.error('Failed to get 3D data:', e);
-                // Use mock data for development
-                this.visualization.initializeReactor(this.getMockData());
+                console.error('Failed to create 3D visualization:', e);
             }
-            
-            // Set initial rod positions in 3D visualization to match startup defaults
-            // AZ (Emergency): 100% extracted - ready to drop for safety
-            // RR (Manual): 15% - main control rods for startup
-            // AR/LAR (Automatic): 25% - automatic regulation with headroom
-            // USP (Shortened): 55% - axial flux shaping
-            this.visualization.setRodPosition('RR' as ChannelType, 0.15);
-            this.visualization.setRodPosition('AR' as ChannelType, 0.25);
-            this.visualization.setRodPosition('LAR' as ChannelType, 0.25);
-            this.visualization.setRodPosition('USP' as ChannelType, 0.55);
-            this.visualization.setRodPosition('AZ' as ChannelType, 1.0);
         }
         
         // Initialize graphs module
         this.graphs = new ReactorGraphs();
         this.graphs.initialize();
         
-        // Initialize 2D projection
+        // Initialize 2D projection (async - loads layout config from JSON)
         const projection2DCanvas = document.getElementById('projection2dCanvas') as HTMLCanvasElement;
         if (projection2DCanvas) {
-            this.projection2D = new Reactor2DProjection(projection2DCanvas);
+            try {
+                this.projection2D = await Reactor2DProjection.create(projection2DCanvas);
+            } catch (e) {
+                console.error('Failed to create 2D projection:', e);
+            }
         }
         
         // Get initial state

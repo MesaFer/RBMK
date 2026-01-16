@@ -13,6 +13,8 @@
 
 import {
     generateRBMKCoreLayout,
+    loadLayoutConfig,
+    isLayoutLoaded,
     CoreChannel,
     ChannelType,
     CHANNEL_COLORS,
@@ -60,7 +62,10 @@ export class Reactor2DProjection {
     private animationId: number | null = null;
     private pulsePhase: number = 0;
     
-    constructor(canvas: HTMLCanvasElement) {
+    /**
+     * Private constructor - use Reactor2DProjection.create() instead
+     */
+    private constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
@@ -68,18 +73,33 @@ export class Reactor2DProjection {
         }
         this.ctx = ctx;
         
-        // Generate core layout
-        this.coreLayout = generateRBMKCoreLayout();
-        console.log('[2D Projection] Core layout loaded:', getChannelCounts(this.coreLayout));
-        
         // Setup resize handling
         this.setupResizeHandling();
+    }
+    
+    /**
+     * Create a new Reactor2DProjection instance
+     * This is an async factory method that loads the layout config before creating the projection
+     */
+    public static async create(canvas: HTMLCanvasElement): Promise<Reactor2DProjection> {
+        // Load layout config if not already loaded
+        if (!isLayoutLoaded()) {
+            await loadLayoutConfig();
+        }
+        
+        const projection = new Reactor2DProjection(canvas);
+        
+        // Generate core layout (now that config is loaded)
+        projection.coreLayout = generateRBMKCoreLayout();
+        console.log('[2D Projection] Core layout loaded:', getChannelCounts(projection.coreLayout));
         
         // Initial render
-        this.render();
+        projection.render();
         
         // Start animation loop
-        this.startAnimation();
+        projection.startAnimation();
+        
+        return projection;
     }
     
     private setupResizeHandling(): void {

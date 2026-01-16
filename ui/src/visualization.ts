@@ -25,6 +25,8 @@ import {
 
 import {
     generateRBMKCoreLayout,
+    loadLayoutConfig,
+    isLayoutLoaded,
     CoreChannel,
     ChannelType,
     CHANNEL_COLORS,
@@ -108,7 +110,10 @@ export class ReactorVisualization {
     private connectionLostOverlay: HTMLDivElement | null = null;
     private isConnectionLost: boolean = false;
     
-    constructor(canvas: HTMLCanvasElement) {
+    /**
+     * Private constructor - use ReactorVisualization.create() instead
+     */
+    private constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         this.engine = new Engine(canvas, true, {
             preserveDrawingBuffer: true,
@@ -134,10 +139,6 @@ export class ReactorVisualization {
         this.camera.lowerRadiusLimit = 5;
         this.camera.upperRadiusLimit = 50;
         
-        // Generate core layout
-        this.coreLayout = generateRBMKCoreLayout();
-        console.log('Core layout generated:', getChannelCounts(this.coreLayout));
-        
         // Setup lighting
         this.setupLighting();
         
@@ -148,9 +149,6 @@ export class ReactorVisualization {
         this.glowLayer = new GlowLayer('glow', this.scene);
         this.glowLayer.intensity = 0.5;
         
-        // Initialize reactor geometry
-        this.initializeReactorGeometry();
-        
         // Start render loop
         this.engine.runRenderLoop(() => {
             this.scene.render();
@@ -158,6 +156,28 @@ export class ReactorVisualization {
         
         // Handle resize
         this.setupResizeHandling();
+    }
+    
+    /**
+     * Create a new ReactorVisualization instance
+     * This is an async factory method that loads the layout config before creating the visualization
+     */
+    public static async create(canvas: HTMLCanvasElement): Promise<ReactorVisualization> {
+        // Load layout config if not already loaded
+        if (!isLayoutLoaded()) {
+            await loadLayoutConfig();
+        }
+        
+        const viz = new ReactorVisualization(canvas);
+        
+        // Generate core layout (now that config is loaded)
+        viz.coreLayout = generateRBMKCoreLayout();
+        console.log('Core layout generated:', getChannelCounts(viz.coreLayout));
+        
+        // Initialize reactor geometry
+        viz.initializeReactorGeometry();
+        
+        return viz;
     }
     
     private setupResizeHandling(): void {

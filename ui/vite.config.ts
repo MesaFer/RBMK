@@ -3,6 +3,8 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   // Prevent vite from obscuring rust errors
   clearScreen: false,
+  // Public directory for static assets (config files, etc.)
+  publicDir: 'public',
   // Tauri expects a fixed port, fail if that port is not available
   server: {
     port: 5173,
