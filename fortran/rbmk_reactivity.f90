@@ -71,13 +71,18 @@ contains
         real(c_double) :: fuel_temp_reactivity, graphite_temp_reactivity
         real(c_double) :: void_reactivity, xe_reactivity, rod_reactivity
         real(c_double) :: target_reactivity, smoothing_tau, smoothing_alpha
+        real(c_double) :: max_reactivity_rate, reactivity_change
         
         ! 1. Fuel temperature feedback (Doppler effect - STRONG negative feedback)
-        if (fuel_temp > REF_FUEL_TEMP) then
-            fuel_temp_reactivity = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
-        else
-            ! Limit positive feedback when cold
-            fuel_temp_reactivity = min(ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP), 0.005d0)
+        ! ALPHA_FUEL is negative (-5e-5), so:
+        ! - Hot fuel (T > REF_FUEL_TEMP=900K): negative feedback (stabilizing)
+        ! - Cold fuel (T < REF_FUEL_TEMP): positive feedback (but must be limited!)
+        fuel_temp_reactivity = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
+        
+        ! Strictly limit positive feedback from cold fuel
+        ! This prevents unrealistic power increase during low-power operation
+        if (fuel_temp_reactivity > 0.0d0) then
+            fuel_temp_reactivity = min(fuel_temp_reactivity, 0.001d0)
         end if
         
         ! 2. Graphite temperature coefficient (POSITIVE in RBMK!)
@@ -97,14 +102,36 @@ contains
                           + void_reactivity + xe_reactivity + rod_reactivity
         
         ! Apply exponential smoothing to reactivity changes for numerical stability
+        ! Use longer time constant for manual rod movements to simulate mechanical inertia
         if (scram_active == 1) then
-            smoothing_tau = 0.05d0  ! Fast response during SCRAM
+            smoothing_tau = 0.05d0  ! Fast response during SCRAM (gravity drop)
         else
-            smoothing_tau = 0.3d0   ! Normal response
+            smoothing_tau = 1.5d0   ! Slower response for normal operation (mechanical drive)
         end if
         smoothing_alpha = min(dt / smoothing_tau, 1.0d0)
         
+        ! Calculate proposed new reactivity
         new_reactivity = smoothed_reactivity + smoothing_alpha * (target_reactivity - smoothed_reactivity)
+        
+        ! Rate limiting: Maximum reactivity change rate
+        ! RBMK control rod drive speed is ~0.4 m/min = 0.67 cm/s
+        ! For 7m (700cm) travel, full extraction takes ~17 minutes
+        ! This translates to ~0.001 dk/k per second for typical rod worth
+        if (scram_active == 1) then
+            max_reactivity_rate = 0.05d0  ! Fast insertion during SCRAM [dk/k per second]
+        else
+            max_reactivity_rate = 0.0015d0  ! Normal rod movement rate [dk/k per second]
+        end if
+        
+        ! Apply rate limiting
+        reactivity_change = new_reactivity - smoothed_reactivity
+        if (abs(reactivity_change) > max_reactivity_rate * dt) then
+            if (reactivity_change > 0.0d0) then
+                new_reactivity = smoothed_reactivity + max_reactivity_rate * dt
+            else
+                new_reactivity = smoothed_reactivity - max_reactivity_rate * dt
+            end if
+        end if
         
         ! Clamp to physically reasonable bounds
         new_reactivity = max(min(new_reactivity, 0.02d0), -0.10d0)

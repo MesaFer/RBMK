@@ -33,7 +33,7 @@ module rbmk_constants
     
     ! Temperature feedback coefficients
     real(c_double), parameter :: ALPHA_FUEL = -5.0d-5           ! Fuel temperature coefficient [1/K] - NEGATIVE (Doppler)
-    real(c_double), parameter :: ALPHA_VOID = 2.925d-4          ! Void coefficient [1/%void] = 4.5*BETA_EFF/100 - POSITIVE!
+    real(c_double), parameter :: ALPHA_VOID = 1.0d-4            ! Void coefficient [1/%void] - POSITIVE but reduced
     real(c_double), parameter :: ALPHA_GRAPHITE = 1.0d-5        ! Graphite temperature coefficient [1/K] - POSITIVE
     
     ! Reference temperatures
@@ -47,7 +47,8 @@ module rbmk_constants
     real(c_double), parameter :: VOID_TIME_CONST = 2.0d0        ! Void formation time [s]
     
     ! Base excess reactivity (reactor is supercritical without rods)
-    real(c_double), parameter :: BASE_REACTIVITY = 0.0975d0
+    ! This should be balanced so that with normal rod positions reactor is critical
+    real(c_double), parameter :: BASE_REACTIVITY = 0.08d0
     
     ! Explosion detection thresholds
     real(c_double), parameter :: FUEL_MELTING_POINT = 2800.0d0  ! K - UO2 melting temperature

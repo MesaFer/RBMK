@@ -156,6 +156,11 @@ impl ReactorSimulator {
         let mut control_rods = Vec::new();
         
         // Initialize control rods with realistic startup positions
+        // RBMK-1000 has 211 control rods total:
+        // - 24 AZ (emergency) rods
+        // - 24 AR/LAR (automatic regulator) rods
+        // - 24 USP (shortened absorber) rods
+        // - 139 RR (manual) rods
         for i in 0..constants::NUM_CONTROL_RODS {
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (constants::NUM_CONTROL_RODS as f64);
             let radius = constants::CORE_RADIUS_CM * 0.7;
@@ -167,15 +172,16 @@ impl ReactorSimulator {
             } else if i < 72 {
                 (RodType::Shortened, 0.55)  // USP - 55% extracted
             } else {
-                (RodType::Manual, 0.15)     // RR - 15% extracted (mostly inserted)
+                (RodType::Manual, 0.50)     // RR - 50% extracted (balanced for criticality)
             };
             
-            // Rod worth varies by type
+            // Rod worth varies by type - increased for proper reactivity control
+            // Total worth should be able to compensate BASE_REACTIVITY (0.08) + margin
             let worth = match rod_type {
-                RodType::Emergency => 0.002,
-                RodType::Automatic => 0.001,
-                RodType::Shortened => 0.0008,
-                RodType::Manual => 0.0006,
+                RodType::Emergency => 0.003,   // 24 rods × 0.003 = 0.072 total
+                RodType::Automatic => 0.0015,  // 24 rods × 0.0015 = 0.036 total
+                RodType::Shortened => 0.001,   // 24 rods × 0.001 = 0.024 total
+                RodType::Manual => 0.0008,     // 139 rods × 0.0008 = 0.111 total
             };
             
             control_rods.push(ControlRod {
@@ -407,7 +413,7 @@ impl ReactorSimulator {
                 RodType::Emergency => 1.0,
                 RodType::Automatic => 0.25,
                 RodType::Shortened => 0.55,
-                RodType::Manual => 0.15,
+                RodType::Manual => 0.50,  // 50% extracted for balanced criticality
             };
         }
     }

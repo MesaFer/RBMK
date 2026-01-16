@@ -127,25 +127,42 @@ contains
         
         real(c_double) :: temp_feedback, effective_rho, power_frac, target_temp
         
-        ! Temperature feedback (limited during shutdown)
-        if (rho < -0.01d0) then
-            temp_feedback = 0.0d0
-        else
-            temp_feedback = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
-            if (fuel_temp < REF_FUEL_TEMP) then
-                temp_feedback = min(temp_feedback, 0.005d0)
-            end if
+        ! Temperature feedback (Doppler effect)
+        ! ALPHA_FUEL is negative, so:
+        ! - Hot fuel (T > REF) gives negative feedback (good)
+        ! - Cold fuel (T < REF) gives positive feedback (but limited)
+        temp_feedback = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
+        
+        ! Limit positive feedback from cold fuel to prevent runaway
+        if (temp_feedback > 0.0d0) then
+            temp_feedback = min(temp_feedback, 0.001d0)
         end if
-        effective_rho = max(min(rho + temp_feedback, 0.02d0), -0.15d0)
+        
+        ! Calculate effective reactivity
+        ! Do NOT add temperature feedback if reactivity is already strongly negative
+        ! This prevents artificial power increase during shutdown
+        if (rho < -0.005d0) then
+            effective_rho = rho  ! Use raw reactivity during shutdown
+        else
+            effective_rho = rho + temp_feedback
+        end if
+        
+        ! Clamp to physical bounds
+        effective_rho = max(min(effective_rho, 0.02d0), -0.15d0)
         
         ! Point kinetics equations
+        ! dn/dt = (rho - beta)/Lambda * n + lambda * C
+        ! At negative reactivity, dn/dt should be negative (power decreasing)
         dn_dt = ((effective_rho - BETA_EFF) / NEUTRON_LIFETIME) * n + LAMBDA_DECAY * c
         dc_dt = (BETA_EFF / NEUTRON_LIFETIME) * n - LAMBDA_DECAY * c
         
-        ! Temperature dynamics
+        ! Temperature dynamics - fuel temperature follows power
+        ! At low power (n << 1), temperature should decrease toward ambient
         power_frac = max(min(n, 10.0d0), 0.0d0)
+        ! Target temperature: 400K at zero power, 900K at nominal (n=1)
         target_temp = 400.0d0 + 500.0d0 * power_frac
-        dtemp_dt = (target_temp - fuel_temp) / 2.0d0
+        ! Slower temperature response (thermal inertia)
+        dtemp_dt = (target_temp - fuel_temp) / 10.0d0
         
     end subroutine kinetics_derivatives
 
