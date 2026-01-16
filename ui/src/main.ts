@@ -6,6 +6,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { ReactorVisualization, Reactor3DData, ControlRod } from './visualization';
 import { ChannelType } from './rbmk_core_layout';
+import { ReactorGraphs } from './graphs';
 
 // Reactor state interface (matches Rust struct)
 interface ReactorState {
@@ -42,7 +43,11 @@ interface SimulationResponse {
 
 class RBMKSimulator {
     private visualization: ReactorVisualization | null = null;
+    private graphs: ReactorGraphs | null = null;
     private state: ReactorState | null = null;
+    
+    // Current view tab
+    private currentTab: '3d' | 'graphs' = '3d';
     
     // Real-time simulation properties
     private simulationTime: number = 12 * 3600; // Start at 12:00:00 (in seconds from midnight)
@@ -89,6 +94,10 @@ class RBMKSimulator {
             this.visualization.setRodPosition('AZ' as ChannelType, 1.0);
         }
         
+        // Initialize graphs module
+        this.graphs = new ReactorGraphs();
+        this.graphs.initialize();
+        
         // Get initial state
         await this.updateState();
         
@@ -100,6 +109,14 @@ class RBMKSimulator {
     }
     
     private setupEventHandlers(): void {
+        // Main tab switching
+        document.querySelectorAll('.main-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                const tabId = (e.target as HTMLElement).dataset.tab as '3d' | 'graphs';
+                this.switchTab(tabId);
+            });
+        });
+        
         // Play/Pause button
         document.getElementById('btn-play-pause')?.addEventListener('click', () => this.togglePlayPause());
         
@@ -294,6 +311,9 @@ class RBMKSimulator {
         // Update 3D visualization
         this.update3D();
         
+        // Update graphs
+        this.updateGraphs();
+        
         // Check for steam explosion - show "Connection Lost" overlay
         this.checkExplosionState();
     }
@@ -388,6 +408,26 @@ class RBMKSimulator {
         ctx.font = '10px sans-serif';
         ctx.fillText('Top', 5, 15);
         ctx.fillText('Bottom', 5, height - 5);
+    }
+    
+    /**
+     * Update graphs with current reactor state
+     */
+    private updateGraphs(): void {
+        if (!this.graphs || !this.state) return;
+        
+        this.graphs.updateData({
+            time: this.state.time,
+            power_mw: this.state.power_mw,
+            k_eff: this.state.k_eff,
+            reactivity_dollars: this.state.reactivity_dollars,
+            avg_fuel_temp: this.state.avg_fuel_temp,
+            avg_coolant_temp: this.state.avg_coolant_temp,
+            avg_graphite_temp: this.state.avg_graphite_temp,
+            avg_coolant_void: this.state.avg_coolant_void,
+            xenon_135: this.state.xenon_135,
+            period: this.state.period,
+        });
     }
     
     private async update3D(): Promise<void> {
@@ -493,6 +533,9 @@ class RBMKSimulator {
         // Hide connection lost overlay if shown
         this.visualization?.hideConnectionLost();
         
+        // Clear graph history
+        this.graphs?.clearData();
+        
         // Reset simulation time to 12:00:00
         this.simulationTime = 12 * 3600;
         this.updateTimeDisplay();
@@ -566,6 +609,35 @@ class RBMKSimulator {
             await invoke('set_time_step', { dt });
         } catch (e) {
             console.error('Failed to set time step:', e);
+        }
+    }
+    
+    /**
+     * Switch between 3D view and Graphs view
+     */
+    private switchTab(tabId: '3d' | 'graphs'): void {
+        this.currentTab = tabId;
+        
+        // Update tab buttons
+        document.querySelectorAll('.main-tab').forEach(tab => {
+            tab.classList.remove('active');
+            if ((tab as HTMLElement).dataset.tab === tabId) {
+                tab.classList.add('active');
+            }
+        });
+        
+        // Show/hide containers
+        const view3dContainer = document.getElementById('view-3d-container');
+        const graphsContainer = document.getElementById('graphs-container');
+        
+        if (tabId === '3d') {
+            view3dContainer?.classList.remove('hidden');
+            graphsContainer?.classList.remove('active');
+        } else {
+            view3dContainer?.classList.add('hidden');
+            graphsContainer?.classList.add('active');
+            // Redraw graphs when switching to graphs tab
+            this.graphs?.drawAllGraphs();
         }
     }
     
@@ -805,6 +877,9 @@ class RBMKSimulator {
         
         // Throttled 3D update
         this.update3D();
+        
+        // Update graphs
+        this.updateGraphs();
         
         // Check for steam explosion - show "Connection Lost" overlay
         this.checkExplosionState();
