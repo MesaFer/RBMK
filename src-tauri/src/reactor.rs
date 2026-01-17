@@ -77,6 +77,37 @@ fn load_fuel_channels_from_config() -> Vec<FuelChannel> {
     create_fallback_channels()
 }
 
+/// Default values for RBMK-1000 fuel channel parameters (cold shutdown state)
+mod channel_defaults {
+    // Thermal parameters (cold shutdown)
+    pub const FUEL_TEMP_K: f64 = 300.0;         // Room temperature
+    pub const COOLANT_TEMP_K: f64 = 300.0;      // Room temperature
+    pub const GRAPHITE_TEMP_K: f64 = 300.0;     // Room temperature
+    pub const COOLANT_VOID_PERCENT: f64 = 0.0;  // No void
+    
+    // Thermal-hydraulic parameters (nominal values, but reactor is shutdown)
+    pub const PRESSURE_MPA: f64 = 7.0;          // Nominal operating pressure
+    pub const FLOW_RATE_KG_S: f64 = 5.5;        // Nominal flow rate per channel
+    pub const INLET_TEMP_K: f64 = 543.0;        // Nominal inlet temp (270°C)
+    pub const OUTLET_TEMP_K: f64 = 557.0;       // Nominal outlet temp (284°C)
+    
+    // Neutronics (shutdown)
+    pub const NEUTRON_FLUX: f64 = 0.0;          // No flux - shutdown
+    pub const POWER_DENSITY_MW_M3: f64 = 0.0;   // No power - shutdown
+    pub const LOCAL_POWER_MW: f64 = 0.0;        // No power - shutdown
+    
+    // Xenon/Iodine (fresh fuel, no history)
+    pub const IODINE_135: f64 = 0.0;            // No iodine
+    pub const XENON_135: f64 = 0.0;             // No xenon
+    
+    // Fuel state
+    pub const BURNUP_MWD_KGU: f64 = 0.0;        // Fresh fuel
+    pub const ENRICHMENT_PERCENT: f64 = 2.0;   // Standard RBMK enrichment
+    
+    // Local reactivity
+    pub const LOCAL_REACTIVITY: f64 = 0.0;      // No local contribution
+}
+
 /// Create fuel channels from loaded config (TK cells only)
 fn create_channels_from_config(config: &LayoutConfig) -> Vec<FuelChannel> {
     let mut fuel_channels = Vec::new();
@@ -91,16 +122,48 @@ fn create_channels_from_config(config: &LayoutConfig) -> Vec<FuelChannel> {
             let y = (cell.grid_y as f64 - GRID_CENTER + 0.5) * GRID_SPACING_CM;
             
             fuel_channels.push(FuelChannel {
+                // Identification and position
                 id,
                 grid_x: cell.grid_x,
                 grid_y: cell.grid_y,
                 x,
                 y,
-                fuel_temp: 300.0,      // Cold shutdown - room temperature
-                coolant_temp: 300.0,   // Cold shutdown - room temperature
-                coolant_void: 0.0,
-                neutron_flux: 0.0,     // No flux - shutdown
-                burnup: 0.0,           // Fresh fuel
+                
+                // Thermal parameters (cold shutdown)
+                fuel_temp: channel_defaults::FUEL_TEMP_K,
+                coolant_temp: channel_defaults::COOLANT_TEMP_K,
+                graphite_temp: channel_defaults::GRAPHITE_TEMP_K,
+                coolant_void: channel_defaults::COOLANT_VOID_PERCENT,
+                
+                // Thermal-hydraulic parameters
+                pressure: channel_defaults::PRESSURE_MPA,
+                flow_rate: channel_defaults::FLOW_RATE_KG_S,
+                inlet_temp: channel_defaults::INLET_TEMP_K,
+                outlet_temp: channel_defaults::OUTLET_TEMP_K,
+                
+                // Neutronics (shutdown)
+                neutron_flux: channel_defaults::NEUTRON_FLUX,
+                power_density: channel_defaults::POWER_DENSITY_MW_M3,
+                local_power: channel_defaults::LOCAL_POWER_MW,
+                
+                // Xenon/Iodine (fresh fuel)
+                iodine_135: channel_defaults::IODINE_135,
+                xenon_135: channel_defaults::XENON_135,
+                
+                // Fuel state
+                burnup: channel_defaults::BURNUP_MWD_KGU,
+                enrichment: channel_defaults::ENRICHMENT_PERCENT,
+                
+                // Control rod (will be assigned later based on layout)
+                has_control_rod: false,
+                control_rod_id: None,
+                local_rod_position: 1.0,  // No rod = effectively withdrawn
+                
+                // Neighbors (will be computed later for diffusion)
+                neighbors: Vec::new(),
+                
+                // Local reactivity
+                local_reactivity: channel_defaults::LOCAL_REACTIVITY,
             });
         }
     }
@@ -123,16 +186,48 @@ fn create_fallback_channels() -> Vec<FuelChannel> {
             
             if x*x + y*y <= constants::CORE_RADIUS_CM * constants::CORE_RADIUS_CM {
                 fuel_channels.push(FuelChannel {
+                    // Identification and position
                     id,
                     grid_x: i as i32,
                     grid_y: j as i32,
                     x,
                     y,
-                    fuel_temp: 300.0,      // Cold shutdown - room temperature
-                    coolant_temp: 300.0,   // Cold shutdown - room temperature
-                    coolant_void: 0.0,
-                    neutron_flux: 0.0,     // No flux - shutdown
-                    burnup: 0.0,           // Fresh fuel
+                    
+                    // Thermal parameters (cold shutdown)
+                    fuel_temp: channel_defaults::FUEL_TEMP_K,
+                    coolant_temp: channel_defaults::COOLANT_TEMP_K,
+                    graphite_temp: channel_defaults::GRAPHITE_TEMP_K,
+                    coolant_void: channel_defaults::COOLANT_VOID_PERCENT,
+                    
+                    // Thermal-hydraulic parameters
+                    pressure: channel_defaults::PRESSURE_MPA,
+                    flow_rate: channel_defaults::FLOW_RATE_KG_S,
+                    inlet_temp: channel_defaults::INLET_TEMP_K,
+                    outlet_temp: channel_defaults::OUTLET_TEMP_K,
+                    
+                    // Neutronics (shutdown)
+                    neutron_flux: channel_defaults::NEUTRON_FLUX,
+                    power_density: channel_defaults::POWER_DENSITY_MW_M3,
+                    local_power: channel_defaults::LOCAL_POWER_MW,
+                    
+                    // Xenon/Iodine (fresh fuel)
+                    iodine_135: channel_defaults::IODINE_135,
+                    xenon_135: channel_defaults::XENON_135,
+                    
+                    // Fuel state
+                    burnup: channel_defaults::BURNUP_MWD_KGU,
+                    enrichment: channel_defaults::ENRICHMENT_PERCENT,
+                    
+                    // Control rod (will be assigned later)
+                    has_control_rod: false,
+                    control_rod_id: None,
+                    local_rod_position: 1.0,
+                    
+                    // Neighbors (will be computed later)
+                    neighbors: Vec::new(),
+                    
+                    // Local reactivity
+                    local_reactivity: channel_defaults::LOCAL_REACTIVITY,
                 });
                 id += 1;
             }
@@ -153,19 +248,52 @@ pub mod constants {
     pub const NEUTRON_LIFETIME: f64 = 1.0e-3; // seconds
 }
 
-/// State of a single fuel channel
+/// State of a single fuel channel with independent parameters
+/// Each channel now has its own physics state for full 2D spatial simulation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FuelChannel {
+    // Identification and position
     pub id: usize,
     pub grid_x: i32,  // Grid position (0-47)
     pub grid_y: i32,  // Grid position (0-47)
     pub x: f64,       // Position in core [cm] from center
     pub y: f64,       // Position in core [cm] from center
-    pub fuel_temp: f64,      // [K]
-    pub coolant_temp: f64,   // [K]
-    pub coolant_void: f64,   // [%]
-    pub neutron_flux: f64,   // Relative flux
-    pub burnup: f64,         // [MWd/kgU]
+    
+    // Thermal parameters (independent per channel)
+    pub fuel_temp: f64,      // Fuel temperature [K]
+    pub coolant_temp: f64,   // Coolant temperature [K]
+    pub graphite_temp: f64,  // Graphite moderator temperature [K]
+    pub coolant_void: f64,   // Void fraction [%]
+    
+    // Thermal-hydraulic parameters (independent per channel)
+    pub pressure: f64,       // Coolant pressure [MPa]
+    pub flow_rate: f64,      // Coolant mass flow rate [kg/s]
+    pub inlet_temp: f64,     // Coolant inlet temperature [K]
+    pub outlet_temp: f64,    // Coolant outlet temperature [K]
+    
+    // Neutronics (independent per channel)
+    pub neutron_flux: f64,   // Local neutron flux [n/cm²/s]
+    pub power_density: f64,  // Local power density [MW/m³]
+    pub local_power: f64,    // Channel thermal power [MW]
+    
+    // Xenon/Iodine dynamics (independent per channel)
+    pub iodine_135: f64,     // I-135 concentration [atoms/cm³]
+    pub xenon_135: f64,      // Xe-135 concentration [atoms/cm³]
+    
+    // Fuel state
+    pub burnup: f64,         // Burnup [MWd/kgU]
+    pub enrichment: f64,     // U-235 enrichment [%]
+    
+    // Local control rod (if present in this cell)
+    pub has_control_rod: bool,
+    pub control_rod_id: Option<usize>,  // ID of control rod if present
+    pub local_rod_position: f64,        // 0.0 = inserted, 1.0 = withdrawn
+    
+    // Neighbor indices for 2D diffusion coupling
+    pub neighbors: Vec<usize>,  // Indices of neighboring channels
+    
+    // Local reactivity contributions
+    pub local_reactivity: f64,  // Local reactivity contribution [Δk/k]
 }
 
 /// State of a control rod
@@ -656,17 +784,69 @@ impl ReactorSimulator {
     
     /// Synchronize all fuel channel parameters from global state
     /// This ensures all 1661 channels have the same values (no diffusion coupling yet)
+    /// 
+    /// Currently synchronized parameters:
+    /// - Thermal: fuel_temp, coolant_temp, graphite_temp, coolant_void
+    /// - Neutronics: neutron_flux, power_density, local_power
+    /// - Xenon/Iodine: iodine_135, xenon_135
+    /// - Reactivity: local_reactivity
+    /// 
+    /// NOT synchronized (per-channel values preserved):
+    /// - Position: id, grid_x, grid_y, x, y
+    /// - Fuel state: burnup, enrichment
+    /// - Control rod: has_control_rod, control_rod_id, local_rod_position
+    /// - Neighbors: neighbors (for future diffusion)
+    /// - Thermal-hydraulic: pressure, flow_rate, inlet_temp, outlet_temp (will vary per channel)
     pub fn synchronize_fuel_channels(&self) {
         let state = self.state.lock().unwrap();
         let mut channels = self.fuel_channels.lock().unwrap();
         
+        // Calculate per-channel power (uniform distribution for now)
+        let num_channels = channels.len() as f64;
+        let power_per_channel = if num_channels > 0.0 {
+            state.power_mw / num_channels
+        } else {
+            0.0
+        };
+        
+        // Power density: power / channel volume
+        // Channel active length ~7m, fuel rod diameter ~13.6mm
+        // Approximate volume per channel: π * (0.68cm)² * 700cm ≈ 1017 cm³ = 1.017e-3 m³
+        let channel_volume_m3 = 1.017e-3;
+        let power_density = power_per_channel / channel_volume_m3;
+        
         // Copy global state values to all channels
         for channel in channels.iter_mut() {
+            // Thermal parameters (synchronized from global averages)
             channel.fuel_temp = state.avg_fuel_temp;
             channel.coolant_temp = state.avg_coolant_temp;
+            channel.graphite_temp = state.avg_graphite_temp;
             channel.coolant_void = state.avg_coolant_void;
+            
+            // Neutronics (synchronized)
             channel.neutron_flux = state.neutron_population;
-            // burnup is not synchronized - it's a cumulative value per channel
+            channel.power_density = power_density;
+            channel.local_power = power_per_channel;
+            
+            // Xenon/Iodine (synchronized from global)
+            channel.iodine_135 = state.iodine_135;
+            channel.xenon_135 = state.xenon_135;
+            
+            // Local reactivity (synchronized from global)
+            channel.local_reactivity = state.reactivity;
+            
+            // Thermal-hydraulic: outlet temp based on power and flow
+            // Q = m_dot * Cp * (T_out - T_in)
+            // For water: Cp ≈ 4.5 kJ/(kg·K) at operating conditions
+            // T_out = T_in + Q / (m_dot * Cp)
+            if channel.flow_rate > 0.0 {
+                let cp_water = 4.5e3; // J/(kg·K)
+                let delta_t = (power_per_channel * 1e6) / (channel.flow_rate * cp_water);
+                channel.outlet_temp = channel.inlet_temp + delta_t;
+            }
+            
+            // Note: burnup, enrichment, control rod info, neighbors are NOT synchronized
+            // They retain their per-channel values
         }
     }
     
@@ -689,14 +869,43 @@ impl ReactorSimulator {
             rod.position = 0.0;  // All rods fully inserted for shutdown
         }
         
-        // Reset fuel channels to cold state
+        // Reset fuel channels to cold shutdown state
         let mut channels = self.fuel_channels.lock().unwrap();
         for channel in channels.iter_mut() {
-            channel.fuel_temp = 300.0;
-            channel.coolant_temp = 300.0;
-            channel.coolant_void = 0.0;
-            channel.neutron_flux = 0.0;
-            channel.burnup = 0.0;
+            // Thermal parameters (cold shutdown)
+            channel.fuel_temp = channel_defaults::FUEL_TEMP_K;
+            channel.coolant_temp = channel_defaults::COOLANT_TEMP_K;
+            channel.graphite_temp = channel_defaults::GRAPHITE_TEMP_K;
+            channel.coolant_void = channel_defaults::COOLANT_VOID_PERCENT;
+            
+            // Thermal-hydraulic parameters (reset to nominal cold values)
+            channel.pressure = channel_defaults::PRESSURE_MPA;
+            channel.flow_rate = channel_defaults::FLOW_RATE_KG_S;
+            channel.inlet_temp = channel_defaults::INLET_TEMP_K;
+            channel.outlet_temp = channel_defaults::OUTLET_TEMP_K;
+            
+            // Neutronics (shutdown)
+            channel.neutron_flux = channel_defaults::NEUTRON_FLUX;
+            channel.power_density = channel_defaults::POWER_DENSITY_MW_M3;
+            channel.local_power = channel_defaults::LOCAL_POWER_MW;
+            
+            // Xenon/Iodine (fresh start)
+            channel.iodine_135 = channel_defaults::IODINE_135;
+            channel.xenon_135 = channel_defaults::XENON_135;
+            
+            // Fuel state - burnup resets to fresh fuel
+            channel.burnup = channel_defaults::BURNUP_MWD_KGU;
+            // enrichment stays at its value (could be different per channel)
+            
+            // Control rod position - if channel has a rod, it's inserted
+            if channel.has_control_rod {
+                channel.local_rod_position = 0.0;  // Fully inserted
+            }
+            
+            // Local reactivity
+            channel.local_reactivity = channel_defaults::LOCAL_REACTIVITY;
+            
+            // Note: neighbors vector is NOT reset - it's a structural property
         }
     }
 }
