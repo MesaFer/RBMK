@@ -20,6 +20,7 @@ fn main() {
         "rbmk_xenon.f90",
         "rbmk_neutronics.f90",
         "rbmk_safety.f90",
+        "rbmk_spatial.f90",      // 2D spatial physics with diffusion
         "rbmk_simulation.f90",
     ];
     

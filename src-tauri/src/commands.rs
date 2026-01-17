@@ -32,21 +32,21 @@ pub fn get_reactor_state(simulator: State<SimulatorState>) -> ReactorState {
     simulator.0.get_state()
 }
 
-/// Perform one simulation step
+/// Perform one simulation step using 2D spatial physics
 #[tauri::command]
 pub fn simulation_step(simulator: State<SimulatorState>) -> SimulationResponse {
-    simulator.0.step();
+    simulator.0.step_spatial();
     SimulationResponse {
         state: simulator.0.get_state(),
         control_rods: simulator.0.get_control_rods(),
     }
 }
 
-/// Run multiple simulation steps (legacy, without time speed)
+/// Run multiple simulation steps using 2D spatial physics (legacy, without time speed)
 #[tauri::command]
 pub fn simulation_run(simulator: State<SimulatorState>, steps: usize) -> SimulationResponse {
     for _ in 0..steps {
-        simulator.0.step();
+        simulator.0.step_spatial();
     }
     
     SimulationResponse {
@@ -92,9 +92,9 @@ pub fn simulation_realtime(
     // Clamp to reasonable range
     let steps_to_run = steps_to_run.min(1000);
     
-    // Run the physics steps
+    // Run the physics steps using 2D spatial physics
     for _ in 0..steps_to_run {
-        simulator.0.step();
+        simulator.0.step_spatial();
     }
     
     SimulationResponse {

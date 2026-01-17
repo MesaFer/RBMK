@@ -697,6 +697,318 @@ pub const ALERT_FUEL_TEMP_HIGH: i32 = 8;
 pub const ALERT_VOID_HIGH: i32 = 16;
 pub const ALERT_SHORT_PERIOD: i32 = 32;
 
+// ============================================================================
+// Spatial physics types and functions (2D diffusion)
+// ============================================================================
+
+/// Maximum neighbors per channel (4-connectivity)
+pub const MAX_NEIGHBORS: usize = 4;
+
+/// Type for spatial simulation step function
+type SpatialSimulationStep = unsafe extern "C" fn(
+    // Number of channels
+    num_channels: i32,
+    // Time step
+    dt: f64,
+    // Global parameters
+    total_rod_worth: f64,
+    scram_active: i32,
+    // Per-channel input arrays
+    neutron_flux_in: *const f64,
+    precursors_in: *const f64,
+    fuel_temp_in: *const f64,
+    coolant_temp_in: *const f64,
+    graphite_temp_in: *const f64,
+    coolant_void_in: *const f64,
+    iodine_in: *const f64,
+    xenon_in: *const f64,
+    local_rod_worth_in: *const f64,
+    // Neighbor connectivity
+    neighbor_indices: *const i32,
+    num_neighbors: *const i32,
+    // Channel positions
+    channel_x: *const f64,
+    channel_y: *const f64,
+    // Per-channel output arrays
+    neutron_flux_out: *mut f64,
+    precursors_out: *mut f64,
+    fuel_temp_out: *mut f64,
+    coolant_temp_out: *mut f64,
+    graphite_temp_out: *mut f64,
+    coolant_void_out: *mut f64,
+    iodine_out: *mut f64,
+    xenon_out: *mut f64,
+    local_power_out: *mut f64,
+    local_reactivity_out: *mut f64,
+);
+
+/// Type for flux initialization function
+type InitializeFluxDistribution = unsafe extern "C" fn(
+    num_channels: i32,
+    channel_x: *const f64,
+    channel_y: *const f64,
+    initial_power: f64,
+    neutron_flux_out: *mut f64,
+);
+
+/// Type for global averages calculation
+type CalculateGlobalAverages = unsafe extern "C" fn(
+    num_channels: i32,
+    fuel_temp: *const f64,
+    coolant_temp: *const f64,
+    graphite_temp: *const f64,
+    coolant_void: *const f64,
+    local_power: *const f64,
+    xenon: *const f64,
+    avg_fuel_temp: *mut f64,
+    avg_coolant_temp: *mut f64,
+    avg_graphite_temp: *mut f64,
+    avg_void: *mut f64,
+    total_power: *mut f64,
+    avg_xenon: *mut f64,
+);
+
+/// Input data for spatial simulation
+#[derive(Debug, Clone)]
+pub struct SpatialChannelInput {
+    pub neutron_flux: f64,
+    pub precursors: f64,
+    pub fuel_temp: f64,
+    pub coolant_temp: f64,
+    pub graphite_temp: f64,
+    pub coolant_void: f64,
+    pub iodine: f64,
+    pub xenon: f64,
+    pub local_rod_worth: f64,
+    pub x: f64,
+    pub y: f64,
+    pub neighbors: Vec<i32>,  // Indices of neighbors (-1 for no neighbor)
+}
+
+/// Output data from spatial simulation
+#[derive(Debug, Clone)]
+pub struct SpatialChannelOutput {
+    pub neutron_flux: f64,
+    pub precursors: f64,
+    pub fuel_temp: f64,
+    pub coolant_temp: f64,
+    pub graphite_temp: f64,
+    pub coolant_void: f64,
+    pub iodine: f64,
+    pub xenon: f64,
+    pub local_power: f64,
+    pub local_reactivity: f64,
+}
+
+/// Global averages from spatial simulation
+#[derive(Debug, Clone)]
+pub struct GlobalAverages {
+    pub avg_fuel_temp: f64,
+    pub avg_coolant_temp: f64,
+    pub avg_graphite_temp: f64,
+    pub avg_void: f64,
+    pub total_power: f64,
+    pub avg_xenon: f64,
+}
+
+/// Perform one spatial simulation step for all channels
+/// 
+/// This is the main entry point for 2D physics with independent channels
+pub fn spatial_simulation_step(
+    dt: f64,
+    total_rod_worth: f64,
+    scram_active: bool,
+    channels: &[SpatialChannelInput],
+) -> Vec<SpatialChannelOutput> {
+    let lib = get_library();
+    let num_channels = channels.len();
+    
+    if num_channels == 0 {
+        return Vec::new();
+    }
+    
+    // Prepare input arrays
+    let mut neutron_flux_in = Vec::with_capacity(num_channels);
+    let mut precursors_in = Vec::with_capacity(num_channels);
+    let mut fuel_temp_in = Vec::with_capacity(num_channels);
+    let mut coolant_temp_in = Vec::with_capacity(num_channels);
+    let mut graphite_temp_in = Vec::with_capacity(num_channels);
+    let mut coolant_void_in = Vec::with_capacity(num_channels);
+    let mut iodine_in = Vec::with_capacity(num_channels);
+    let mut xenon_in = Vec::with_capacity(num_channels);
+    let mut local_rod_worth_in = Vec::with_capacity(num_channels);
+    let mut channel_x = Vec::with_capacity(num_channels);
+    let mut channel_y = Vec::with_capacity(num_channels);
+    let mut neighbor_indices = vec![-1i32; num_channels * MAX_NEIGHBORS];
+    let mut num_neighbors_arr = Vec::with_capacity(num_channels);
+    
+    for (i, ch) in channels.iter().enumerate() {
+        neutron_flux_in.push(ch.neutron_flux);
+        precursors_in.push(ch.precursors);
+        fuel_temp_in.push(ch.fuel_temp);
+        coolant_temp_in.push(ch.coolant_temp);
+        graphite_temp_in.push(ch.graphite_temp);
+        coolant_void_in.push(ch.coolant_void);
+        iodine_in.push(ch.iodine);
+        xenon_in.push(ch.xenon);
+        local_rod_worth_in.push(ch.local_rod_worth);
+        channel_x.push(ch.x);
+        channel_y.push(ch.y);
+        
+        // Copy neighbor indices
+        let n_neighbors = ch.neighbors.len().min(MAX_NEIGHBORS);
+        num_neighbors_arr.push(n_neighbors as i32);
+        for (j, &neighbor_idx) in ch.neighbors.iter().take(MAX_NEIGHBORS).enumerate() {
+            neighbor_indices[i * MAX_NEIGHBORS + j] = neighbor_idx;
+        }
+    }
+    
+    // Prepare output arrays
+    let mut neutron_flux_out = vec![0.0f64; num_channels];
+    let mut precursors_out = vec![0.0f64; num_channels];
+    let mut fuel_temp_out = vec![0.0f64; num_channels];
+    let mut coolant_temp_out = vec![0.0f64; num_channels];
+    let mut graphite_temp_out = vec![0.0f64; num_channels];
+    let mut coolant_void_out = vec![0.0f64; num_channels];
+    let mut iodine_out = vec![0.0f64; num_channels];
+    let mut xenon_out = vec![0.0f64; num_channels];
+    let mut local_power_out = vec![0.0f64; num_channels];
+    let mut local_reactivity_out = vec![0.0f64; num_channels];
+    
+    unsafe {
+        let func: Symbol<SpatialSimulationStep> = lib
+            .get(b"spatial_simulation_step")
+            .expect("Failed to load spatial_simulation_step");
+        
+        func(
+            num_channels as i32,
+            dt,
+            total_rod_worth,
+            if scram_active { 1 } else { 0 },
+            neutron_flux_in.as_ptr(),
+            precursors_in.as_ptr(),
+            fuel_temp_in.as_ptr(),
+            coolant_temp_in.as_ptr(),
+            graphite_temp_in.as_ptr(),
+            coolant_void_in.as_ptr(),
+            iodine_in.as_ptr(),
+            xenon_in.as_ptr(),
+            local_rod_worth_in.as_ptr(),
+            neighbor_indices.as_ptr(),
+            num_neighbors_arr.as_ptr(),
+            channel_x.as_ptr(),
+            channel_y.as_ptr(),
+            neutron_flux_out.as_mut_ptr(),
+            precursors_out.as_mut_ptr(),
+            fuel_temp_out.as_mut_ptr(),
+            coolant_temp_out.as_mut_ptr(),
+            graphite_temp_out.as_mut_ptr(),
+            coolant_void_out.as_mut_ptr(),
+            iodine_out.as_mut_ptr(),
+            xenon_out.as_mut_ptr(),
+            local_power_out.as_mut_ptr(),
+            local_reactivity_out.as_mut_ptr(),
+        );
+    }
+    
+    // Build output vector
+    let mut results = Vec::with_capacity(num_channels);
+    for i in 0..num_channels {
+        results.push(SpatialChannelOutput {
+            neutron_flux: neutron_flux_out[i],
+            precursors: precursors_out[i],
+            fuel_temp: fuel_temp_out[i],
+            coolant_temp: coolant_temp_out[i],
+            graphite_temp: graphite_temp_out[i],
+            coolant_void: coolant_void_out[i],
+            iodine: iodine_out[i],
+            xenon: xenon_out[i],
+            local_power: local_power_out[i],
+            local_reactivity: local_reactivity_out[i],
+        });
+    }
+    
+    results
+}
+
+/// Initialize flux distribution with cosine radial profile
+pub fn initialize_flux_distribution(
+    channel_x: &[f64],
+    channel_y: &[f64],
+    initial_power: f64,
+) -> Vec<f64> {
+    let lib = get_library();
+    let num_channels = channel_x.len();
+    let mut flux = vec![0.0f64; num_channels];
+    
+    unsafe {
+        let func: Symbol<InitializeFluxDistribution> = lib
+            .get(b"initialize_flux_distribution")
+            .expect("Failed to load initialize_flux_distribution");
+        
+        func(
+            num_channels as i32,
+            channel_x.as_ptr(),
+            channel_y.as_ptr(),
+            initial_power,
+            flux.as_mut_ptr(),
+        );
+    }
+    
+    flux
+}
+
+/// Calculate global averages from per-channel data
+pub fn calculate_global_averages(
+    fuel_temp: &[f64],
+    coolant_temp: &[f64],
+    graphite_temp: &[f64],
+    coolant_void: &[f64],
+    local_power: &[f64],
+    xenon: &[f64],
+) -> GlobalAverages {
+    let lib = get_library();
+    let num_channels = fuel_temp.len();
+    
+    let mut avg_fuel_temp = 0.0f64;
+    let mut avg_coolant_temp = 0.0f64;
+    let mut avg_graphite_temp = 0.0f64;
+    let mut avg_void = 0.0f64;
+    let mut total_power = 0.0f64;
+    let mut avg_xenon = 0.0f64;
+    
+    unsafe {
+        let func: Symbol<CalculateGlobalAverages> = lib
+            .get(b"calculate_global_averages")
+            .expect("Failed to load calculate_global_averages");
+        
+        func(
+            num_channels as i32,
+            fuel_temp.as_ptr(),
+            coolant_temp.as_ptr(),
+            graphite_temp.as_ptr(),
+            coolant_void.as_ptr(),
+            local_power.as_ptr(),
+            xenon.as_ptr(),
+            &mut avg_fuel_temp,
+            &mut avg_coolant_temp,
+            &mut avg_graphite_temp,
+            &mut avg_void,
+            &mut total_power,
+            &mut avg_xenon,
+        );
+    }
+    
+    GlobalAverages {
+        avg_fuel_temp,
+        avg_coolant_temp,
+        avg_graphite_temp,
+        avg_void,
+        total_power,
+        avg_xenon,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

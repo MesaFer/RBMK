@@ -150,7 +150,8 @@ mod channel_defaults {
     pub const OUTLET_TEMP_K: f64 = 557.0;       // Nominal outlet temp (284°C)
     
     // Neutronics (shutdown)
-    pub const NEUTRON_FLUX: f64 = 0.0;          // No flux - shutdown
+    pub const NEUTRON_FLUX: f64 = 1e-6;         // Very low neutron source (subcritical)
+    pub const PRECURSORS: f64 = 0.0;            // No precursors - fresh start
     pub const POWER_DENSITY_MW_M3: f64 = 0.0;   // No power - shutdown
     pub const LOCAL_POWER_MW: f64 = 0.0;        // No power - shutdown
     
@@ -201,6 +202,7 @@ fn create_channels_from_config(config: &LayoutConfig) -> Vec<FuelChannel> {
                 
                 // Neutronics (shutdown)
                 neutron_flux: channel_defaults::NEUTRON_FLUX,
+                precursors: channel_defaults::PRECURSORS,
                 power_density: channel_defaults::POWER_DENSITY_MW_M3,
                 local_power: channel_defaults::LOCAL_POWER_MW,
                 
@@ -265,6 +267,7 @@ fn create_fallback_channels() -> Vec<FuelChannel> {
                     
                     // Neutronics (shutdown)
                     neutron_flux: channel_defaults::NEUTRON_FLUX,
+                    precursors: channel_defaults::PRECURSORS,
                     power_density: channel_defaults::POWER_DENSITY_MW_M3,
                     local_power: channel_defaults::LOCAL_POWER_MW,
                     
@@ -331,6 +334,7 @@ pub struct FuelChannel {
     
     // Neutronics (independent per channel)
     pub neutron_flux: f64,   // Local neutron flux [n/cm²/s]
+    pub precursors: f64,     // Delayed neutron precursors [atoms/cm³]
     pub power_density: f64,  // Local power density [MW/m³]
     pub local_power: f64,    // Channel thermal power [MW]
     
@@ -878,79 +882,242 @@ impl ReactorSimulator {
         self.fuel_channels.lock().unwrap().clone()
     }
     
-    /// Synchronize all fuel channel parameters from global state
-    /// This ensures all 1661 channels have the same values (no diffusion coupling yet)
-    /// 
-    /// Currently synchronized parameters:
-    /// - Thermal: fuel_temp, coolant_temp, graphite_temp, coolant_void
-    /// - Neutronics: neutron_flux, power_density, local_power
-    /// - Xenon/Iodine: iodine_135, xenon_135
-    /// - Reactivity: local_reactivity
-    /// 
-    /// NOT synchronized (per-channel values preserved):
-    /// - Position: id, grid_x, grid_y, x, y
-    /// - Fuel state: burnup, enrichment
-    /// - Control rod: has_control_rod, control_rod_id, local_rod_position
-    /// - Neighbors: neighbors (for future diffusion)
-    /// - Thermal-hydraulic: pressure, flow_rate, inlet_temp, outlet_temp (will vary per channel)
-    pub fn synchronize_fuel_channels(&self) {
-        let state = self.state.lock().unwrap();
-        let mut channels = self.fuel_channels.lock().unwrap();
-        
-        // Calculate per-channel power (uniform distribution for now)
-        let num_channels = channels.len() as f64;
-        let power_per_channel = if num_channels > 0.0 {
-            state.power_mw / num_channels
-        } else {
-            0.0
+    /// Perform one spatial simulation step using 2D diffusion physics
+    ///
+    /// This method uses the Fortran spatial physics module to calculate:
+    /// - 2D neutron diffusion with neighbor coupling
+    /// - Per-channel thermal-hydraulics
+    /// - Per-channel xenon dynamics
+    /// - Local reactivity feedback
+    ///
+    /// Each of the 1661 fuel channels is calculated independently with
+    /// coupling to its neighbors through the diffusion equation.
+    pub fn step_spatial(&self) {
+        // First, run automatic regulator if enabled (before physics step)
+        let (ar_enabled, ar_target, ar_settings, current_power, dt, scram_active) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.auto_regulator.enabled,
+                state.auto_regulator.target_power,
+                state.auto_regulator.clone(),
+                state.power_percent,
+                state.dt,
+                state.scram_active,
+            )
         };
         
-        // Power density: power / channel volume
-        // Channel active length ~7m, fuel rod diameter ~13.6mm
-        // Approximate volume per channel: π * (0.68cm)² * 700cm ≈ 1017 cm³ = 1.017e-3 m³
-        let channel_volume_m3 = 1.017e-3;
-        let power_density = power_per_channel / channel_volume_m3;
+        // Run automatic regulator (AR/LAR) - PID control for power
+        if ar_enabled && !scram_active {
+            let rod_adjustment = self.calculate_ar_adjustment(&ar_settings, current_power, dt);
+            if rod_adjustment.abs() > 1e-6 {
+                self.adjust_automatic_rods(rod_adjustment);
+            }
+        }
         
-        // Copy global state values to all channels
-        for channel in channels.iter_mut() {
-            // Thermal parameters (synchronized from global averages)
-            channel.fuel_temp = state.avg_fuel_temp;
-            channel.coolant_temp = state.avg_coolant_temp;
-            channel.graphite_temp = state.avg_graphite_temp;
-            channel.coolant_void = state.avg_coolant_void;
+        // Calculate total control rod worth
+        let total_rod_worth = self.calculate_total_rod_worth();
+        
+        // Prepare spatial input data from fuel channels
+        let spatial_inputs: Vec<fortran_ffi::SpatialChannelInput> = {
+            let channels = self.fuel_channels.lock().unwrap();
+            channels.iter().map(|ch| {
+                // Convert neighbor indices to i32, padding with -1
+                let mut neighbors = vec![-1i32; fortran_ffi::MAX_NEIGHBORS];
+                for (i, &n) in ch.neighbors.iter().take(fortran_ffi::MAX_NEIGHBORS).enumerate() {
+                    neighbors[i] = n as i32;
+                }
+                
+                fortran_ffi::SpatialChannelInput {
+                    neutron_flux: ch.neutron_flux,
+                    precursors: ch.precursors,
+                    fuel_temp: ch.fuel_temp,
+                    coolant_temp: ch.coolant_temp,
+                    graphite_temp: ch.graphite_temp,
+                    coolant_void: ch.coolant_void,
+                    iodine: ch.iodine_135,
+                    xenon: ch.xenon_135,
+                    local_rod_worth: if ch.has_control_rod {
+                        // Get rod worth from control rods
+                        let rods = self.control_rods.lock().unwrap();
+                        if let Some(rod_id) = ch.control_rod_id {
+                            if let Some(rod) = rods.get(rod_id) {
+                                rod.worth * (1.0 - rod.position)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    },
+                    x: ch.x,
+                    y: ch.y,
+                    neighbors,
+                }
+            }).collect()
+        };
+        
+        // Get current state parameters
+        let (dt, scram_active) = {
+            let state = self.state.lock().unwrap();
+            (state.dt, state.scram_active)
+        };
+        
+        // Call Fortran spatial simulation
+        let spatial_outputs = fortran_ffi::spatial_simulation_step(
+            dt,
+            total_rod_worth,
+            scram_active,
+            &spatial_inputs,
+        );
+        
+        // Update fuel channels from spatial outputs
+        {
+            let mut channels = self.fuel_channels.lock().unwrap();
+            for (ch, output) in channels.iter_mut().zip(spatial_outputs.iter()) {
+                ch.neutron_flux = output.neutron_flux;
+                ch.precursors = output.precursors;
+                ch.fuel_temp = output.fuel_temp;
+                ch.coolant_temp = output.coolant_temp;
+                ch.graphite_temp = output.graphite_temp;
+                ch.coolant_void = output.coolant_void;
+                ch.iodine_135 = output.iodine;
+                ch.xenon_135 = output.xenon;
+                ch.local_power = output.local_power;
+                ch.local_reactivity = output.local_reactivity;
+                
+                // Calculate power density from local power
+                // Channel volume: π * (0.68cm)² * 700cm ≈ 1017 cm³ = 1.017e-3 m³
+                let channel_volume_m3 = 1.017e-3;
+                ch.power_density = output.local_power / channel_volume_m3;
+                
+                // Update outlet temperature based on power and flow
+                if ch.flow_rate > 0.0 {
+                    let cp_water = 4.5e3; // J/(kg·K)
+                    let delta_t = (output.local_power * 1e6) / (ch.flow_rate * cp_water);
+                    ch.outlet_temp = ch.inlet_temp + delta_t;
+                }
+            }
+        }
+        
+        // Calculate global averages from per-channel data
+        let (fuel_temps, coolant_temps, graphite_temps, voids, powers, xenons):
+            (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) = {
+            let channels = self.fuel_channels.lock().unwrap();
+            let fuel_temps: Vec<f64> = channels.iter().map(|c| c.fuel_temp).collect();
+            let coolant_temps: Vec<f64> = channels.iter().map(|c| c.coolant_temp).collect();
+            let graphite_temps: Vec<f64> = channels.iter().map(|c| c.graphite_temp).collect();
+            let voids: Vec<f64> = channels.iter().map(|c| c.coolant_void).collect();
+            let powers: Vec<f64> = channels.iter().map(|c| c.local_power).collect();
+            let xenons: Vec<f64> = channels.iter().map(|c| c.xenon_135).collect();
+            (fuel_temps, coolant_temps, graphite_temps, voids, powers, xenons)
+        };
+        
+        let averages = fortran_ffi::calculate_global_averages(
+            &fuel_temps,
+            &coolant_temps,
+            &graphite_temps,
+            &voids,
+            &powers,
+            &xenons,
+        );
+        
+        // Update global state from averages
+        {
+            let mut state = self.state.lock().unwrap();
             
-            // Neutronics (synchronized)
-            channel.neutron_flux = state.neutron_population;
-            channel.power_density = power_density;
-            channel.local_power = power_per_channel;
+            state.avg_fuel_temp = averages.avg_fuel_temp;
+            state.avg_coolant_temp = averages.avg_coolant_temp;
+            state.avg_graphite_temp = averages.avg_graphite_temp;
+            state.avg_coolant_void = averages.avg_void;
+            state.power_mw = averages.total_power;
+            state.power_percent = averages.total_power / constants::NOMINAL_POWER_MW * 100.0;
+            state.xenon_135 = averages.avg_xenon;
             
-            // Xenon/Iodine (synchronized from global)
-            channel.iodine_135 = state.iodine_135;
-            channel.xenon_135 = state.xenon_135;
+            // Calculate total neutron population and precursors from channels
+            let channels = self.fuel_channels.lock().unwrap();
+            let total_flux: f64 = channels.iter().map(|c| c.neutron_flux).sum();
+            let total_precursors: f64 = channels.iter().map(|c| c.precursors).sum();
+            let avg_reactivity: f64 = channels.iter().map(|c| c.local_reactivity).sum::<f64>()
+                / channels.len() as f64;
             
-            // Local reactivity (synchronized from global)
-            channel.local_reactivity = state.reactivity;
+            state.neutron_population = total_flux / channels.len() as f64;
+            state.precursors = total_precursors / channels.len() as f64;
+            state.reactivity = avg_reactivity;
+            state.smoothed_reactivity = avg_reactivity;
+            state.k_eff = 1.0 + avg_reactivity;
+            state.reactivity_dollars = avg_reactivity / constants::BETA_EFF;
             
-            // Thermal-hydraulic: outlet temp based on power and flow
-            // Q = m_dot * Cp * (T_out - T_in)
-            // For water: Cp ≈ 4.5 kJ/(kg·K) at operating conditions
-            // T_out = T_in + Q / (m_dot * Cp)
-            if channel.flow_rate > 0.0 {
-                let cp_water = 4.5e3; // J/(kg·K)
-                let delta_t = (power_per_channel * 1e6) / (channel.flow_rate * cp_water);
-                channel.outlet_temp = channel.inlet_temp + delta_t;
+            // Calculate reactor period
+            if avg_reactivity.abs() > 1e-10 {
+                state.period = constants::NEUTRON_LIFETIME / avg_reactivity;
+            } else {
+                state.period = f64::INFINITY;
             }
             
-            // Note: burnup, enrichment, control rod info, neighbors are NOT synchronized
-            // They retain their per-channel values
+            // Handle SCRAM timing
+            if state.scram_active {
+                state.scram_time += dt;
+            }
+            
+            // Update automatic regulator state (PID integral/derivative terms)
+            if state.auto_regulator.enabled && !state.scram_active {
+                let error = state.auto_regulator.target_power - state.power_percent;
+                let max_integral = 100.0;
+                
+                if error.abs() > state.auto_regulator.deadband {
+                    state.auto_regulator.integral_error =
+                        (state.auto_regulator.integral_error + error * dt).clamp(-max_integral, max_integral);
+                } else {
+                    state.auto_regulator.integral_error *= 0.99;
+                }
+                
+                state.auto_regulator.last_error = error;
+            }
+            
+            // Update axial flux distribution
+            state.axial_flux = fortran_ffi::update_axial_flux(50, state.neutron_population);
+            
+            // Generate alerts
+            state.alerts.clear();
+            if state.power_percent > 110.0 {
+                state.alerts.push("WARNING: Power exceeds 110% nominal!".to_string());
+            }
+            if state.reactivity_dollars > 0.5 {
+                state.alerts.push("WARNING: Reactivity exceeds 0.5$!".to_string());
+            }
+            if state.reactivity_dollars >= 1.0 {
+                state.alerts.push("CRITICAL: Prompt critical condition!".to_string());
+            }
+            if state.avg_fuel_temp > 2800.0 {
+                state.alerts.push("WARNING: Fuel temperature exceeds limit!".to_string());
+            }
+            if state.avg_coolant_void > 50.0 {
+                state.alerts.push("WARNING: High void fraction - positive reactivity feedback!".to_string());
+            }
+            if state.period.is_finite() && state.period > 0.0 && state.period < 30.0 {
+                let period = state.period;
+                state.alerts.push(format!("WARNING: Short reactor period: {:.1}s", period));
+            }
+            
+            // Check for explosion conditions
+            if !state.explosion_occurred && state.avg_fuel_temp > 2800.0 && state.avg_coolant_void > 80.0 {
+                state.explosion_occurred = true;
+                state.explosion_time = state.time;
+                state.alerts.push("*** STEAM EXPLOSION - CORE DESTRUCTION ***".to_string());
+            }
+            
+            // Update time
+            state.time += dt;
         }
     }
     
-    /// Get fuel channels with synchronized parameters
+    /// Get fuel channels with their independent parameters
+    /// Each channel has its own physics state from 2D spatial simulation
     /// This is the main method for getting channel data for visualization
     pub fn get_fuel_channels_synchronized(&self) -> Vec<FuelChannel> {
-        // First synchronize, then return
-        self.synchronize_fuel_channels();
+        // No synchronization - channels have independent values from spatial physics
         self.fuel_channels.lock().unwrap().clone()
     }
     
@@ -982,6 +1149,7 @@ impl ReactorSimulator {
             
             // Neutronics (shutdown)
             channel.neutron_flux = channel_defaults::NEUTRON_FLUX;
+            channel.precursors = channel_defaults::PRECURSORS;
             channel.power_density = channel_defaults::POWER_DENSITY_MW_M3;
             channel.local_power = channel_defaults::LOCAL_POWER_MW;
             

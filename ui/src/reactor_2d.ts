@@ -48,6 +48,7 @@ export interface FuelChannelData {
     inlet_temp: number;
     outlet_temp: number;
     neutron_flux: number;
+    precursors: number;
     power_density: number;
     local_power: number;
     iodine_135: number;
