@@ -27,7 +27,8 @@ module rbmk_spatial
     
     ! Diffusion coupling coefficient (cm^2/s)
     ! Controls how fast neutrons diffuse between neighboring channels
-    real(c_double), parameter :: DIFFUSION_COUPLING = 50.0d0
+    ! Increased for more realistic smooth distribution (neutron diffusion length ~7cm in RBMK)
+    real(c_double), parameter :: DIFFUSION_COUPLING = 150.0d0
     
     ! Thermal coupling coefficient (W/K)
     ! Controls heat transfer through graphite between channels
@@ -203,8 +204,43 @@ contains
             ! =====================================================
             ! Step 5: Calculate local power
             ! =====================================================
-            ! Power proportional to flux * radial factor
+            ! Power proportional to flux * radial factor * LOCAL rod effect
+            !
+            ! The LOCAL rod effect creates a direct power multiplier:
+            ! - Where rods are withdrawn: power is MUCH higher (hot spot)
+            ! - Where rods are inserted: power is lower (cold spot)
+            !
+            ! This provides IMMEDIATE visual feedback when rods are moved,
+            ! rather than waiting for slow diffusion effects.
+            !
+            ! The key insight: we use rho_local_effect DIRECTLY, not the total
+            ! local_reactivity (which includes global effects).
+            !
+            ! rho_local_effect = (max_local_rod_worth - local_rod_worth) * 5.0
+            ! When local_rod_worth = 0 (all nearby rods withdrawn): rho_local = +0.015
+            ! When local_rod_worth = 0.003 (all nearby rods inserted): rho_local = 0
+            !
+            ! We use a STRONG multiplier (50x) to make the effect very visible:
+            ! - Withdrawn rods: multiplier = 1 + 0.015 * 50 = 1.75 (75% higher power!)
+            ! - Inserted rods: multiplier = 1.0 (baseline)
             power_density = neutron_flux_out(i) * radial_factor
+            
+            ! Calculate local rod effect directly (same formula as in calculate_local_reactivity)
+            ! This isolates the LOCAL effect from global reactivity
+            !
+            ! REALISTIC local rod effect:
+            ! In real RBMK, local power peaking factor from rod withdrawal is ~1.1-1.3
+            ! (not 2.35x as before - that was unrealistic)
+            !
+            ! max_local_rod_worth = 0.03 (with 10x amplification in Rust)
+            ! Scale factor = 3.0 for reactivity, but only 2.0 for power visualization
+            !
+            ! When rods withdrawn nearby: local_rod_worth_in ≈ 0, effect = +0.06, multiplier = 1.18
+            ! When rods inserted nearby: local_rod_worth_in ≈ 0.03, effect = 0, multiplier = 1.0
+            ! This gives realistic ~18% local power peaking
+            power_density = power_density * (1.0d0 + (0.03d0 - local_rod_worth_in(i)) * 2.0d0)
+            power_density = max(power_density, 0.1d0)  ! Ensure minimum power
+            
             local_power_out(i) = power_density * NOMINAL_POWER / real(NUM_CHANNELS, c_double)
             
             ! =====================================================
@@ -244,6 +280,21 @@ contains
     
     ! =========================================================================
     ! Calculate local reactivity for a single channel
+    !
+    ! local_rod_worth: Worth of the control rod in THIS channel (if any)
+    !                  = rod.worth * (1 - rod.position)
+    !                  = 0 when rod is fully withdrawn (position = 1.0)
+    !                  = rod.worth when rod is fully inserted (position = 0.0)
+    !
+    ! total_rod_worth: Sum of all rod worths across the reactor (for global effect)
+    !                  This is NOT used for local calculation anymore!
+    !
+    ! The local reactivity depends on:
+    ! - Whether this channel HAS a control rod
+    ! - The position of that rod (local_rod_worth)
+    ! - Temperature feedbacks (Doppler, graphite)
+    ! - Void coefficient
+    ! - Xenon poisoning
     ! =========================================================================
     subroutine calculate_local_reactivity( &
         fuel_temp, graphite_temp, coolant_void, &
@@ -254,27 +305,33 @@ contains
         real(c_double), intent(in) :: graphite_temp
         real(c_double), intent(in) :: coolant_void
         real(c_double), intent(in) :: xenon_conc
-        real(c_double), intent(in) :: local_rod_worth
-        real(c_double), intent(in) :: total_rod_worth
+        real(c_double), intent(in) :: local_rod_worth  ! Distance-weighted sum of nearby rod worths
+        real(c_double), intent(in) :: total_rod_worth  ! Total worth of ALL inserted rods (global)
         integer(c_int), intent(in) :: scram_active
         real(c_double), intent(out) :: reactivity
         
         real(c_double) :: rho_fuel, rho_void, rho_graphite, rho_xenon, rho_rods
+        real(c_double) :: rho_local_effect
         real(c_double) :: xenon_eq
+        real(c_double) :: max_local_rod_worth
         
         ! Base reactivity (excess reactivity of fresh core)
+        ! This represents the core with all rods withdrawn
         reactivity = BASE_REACTIVITY
         
         ! Fuel temperature feedback (Doppler effect - NEGATIVE)
+        ! Higher fuel temp = more neutron absorption = lower reactivity
         rho_fuel = ALPHA_FUEL * (fuel_temp - REF_FUEL_TEMP)
         
-        ! Void coefficient feedback (POSITIVE in RBMK)
+        ! Void coefficient feedback (POSITIVE in RBMK!)
+        ! More steam = less neutron moderation = harder spectrum = more Pu-239 fission
         rho_void = ALPHA_VOID * coolant_void
         
         ! Graphite temperature feedback (slightly positive)
         rho_graphite = ALPHA_GRAPHITE * (graphite_temp - REF_GRAPHITE_TEMP)
         
         ! Xenon poisoning (always negative)
+        ! Xe-135 has huge neutron absorption cross-section
         xenon_eq = 3.0d15  ! Equilibrium xenon at full power
         if (xenon_conc > 0.0d0) then
             rho_xenon = -0.03d0 * (xenon_conc / xenon_eq)
@@ -282,18 +339,46 @@ contains
             rho_xenon = 0.0d0
         end if
         
-        ! Control rod worth (negative when inserted)
-        if (scram_active /= 0) then
-            rho_rods = -total_rod_worth - local_rod_worth
-        else
-            rho_rods = -total_rod_worth - local_rod_worth
-        end if
+        ! GLOBAL control rod effect
+        ! total_rod_worth is the sum of all inserted rod worths
+        ! This determines the overall reactivity of the reactor
+        rho_rods = -total_rod_worth
         
-        ! Total reactivity
-        reactivity = reactivity + rho_fuel + rho_void + rho_graphite + rho_xenon + rho_rods
+        ! LOCAL control rod effect (direct, not deviation-based)
+        !
+        ! local_rod_worth is the distance-weighted sum of nearby rod worths
+        ! (already amplified 10x in Rust for visibility)
+        !
+        ! When rods are inserted, local_rod_worth is HIGH -> negative reactivity
+        ! When rods are withdrawn, local_rod_worth is LOW -> less negative reactivity
+        !
+        ! This creates LOCAL hot spots where rods are withdrawn:
+        ! - A withdrawn rod contributes 0 to local_rod_worth
+        ! - An inserted rod contributes its full worth (weighted by distance)
+        !
+        ! Maximum possible local_rod_worth when all nearby rods are inserted:
+        ! With 10x amplification and Gaussian decay:
+        ! ~4 rods * 0.01 amplified_worth * ~0.7 avg_distance_factor ~= 0.03
+        !
+        ! The effect is: less local rod worth = higher local reactivity
+        ! This creates a HOT SPOT where rods are withdrawn
+        !
+        ! Scale factor: 3.0 to make effect clearly visible
+        ! When local_rod_worth = 0 (all nearby rods withdrawn): rho_local = +0.09
+        ! When local_rod_worth = 0.03 (all nearby rods inserted): rho_local = 0
+        max_local_rod_worth = 0.03d0
+        
+        ! Local effect: negative of local rod worth, scaled
+        ! This creates a HOT SPOT where rods are withdrawn
+        ! Reduced from 3.0 to 1.5 for more realistic local peaking (~5% reactivity effect)
+        rho_local_effect = (max_local_rod_worth - local_rod_worth) * 1.5d0
+        
+        ! Total reactivity for this channel
+        ! = base + feedbacks + global rod effect + local effect
+        reactivity = reactivity + rho_fuel + rho_void + rho_graphite + rho_xenon + rho_rods + rho_local_effect
         
         ! Clamp to reasonable range
-        reactivity = max(-0.2d0, min(0.1d0, reactivity))
+        reactivity = max(-0.2d0, min(0.15d0, reactivity))
         
     end subroutine calculate_local_reactivity
     

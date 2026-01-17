@@ -332,9 +332,16 @@ export class ReactorHeatmap {
         }
         
         // Interpolate values to grid using inverse distance weighting
+        // with increased smoothing for better visualization
         const gridStep = (this.CORE_RADIUS * 2) / this.gridResolution;
         const startX = -this.CORE_RADIUS;
         const startY = -this.CORE_RADIUS;
+        
+        // Use lower power for smoother interpolation (1.5 instead of 2)
+        // and limit the number of nearest neighbors for performance
+        const power = 1.5; // Lower power = smoother gradients
+        const maxNeighbors = 20; // Consider more neighbors for smoother result
+        const maxDistance = 200; // Maximum distance to consider (cm) - increased for smoother gradients
         
         for (let i = 0; i < this.gridResolution; i++) {
             for (let j = 0; j < this.gridResolution; j++) {
@@ -348,25 +355,41 @@ export class ReactorHeatmap {
                     continue;
                 }
                 
-                // Inverse distance weighting interpolation
-                let weightedSum = 0;
-                let weightSum = 0;
-                const power = 2; // IDW power parameter
+                // Find nearest channels and calculate distances
+                const channelDistances: { value: number; dist: number }[] = [];
                 
                 for (const cv of channelValues) {
                     const dx = x - cv.x;
                     const dy = y - cv.y;
                     const dist = Math.sqrt(dx * dx + dy * dy);
                     
+                    if (dist < maxDistance) {
+                        channelDistances.push({ value: cv.value, dist });
+                    }
+                }
+                
+                // Sort by distance and take nearest neighbors
+                channelDistances.sort((a, b) => a.dist - b.dist);
+                const nearest = channelDistances.slice(0, maxNeighbors);
+                
+                // Inverse distance weighting interpolation
+                let weightedSum = 0;
+                let weightSum = 0;
+                
+                for (const { value, dist } of nearest) {
                     if (dist < 1) {
                         // Very close to a channel - use its value directly
-                        weightedSum = cv.value;
+                        weightedSum = value;
                         weightSum = 1;
                         break;
                     }
                     
-                    const weight = 1 / Math.pow(dist, power);
-                    weightedSum += weight * cv.value;
+                    // Use Gaussian-like weighting for smoother results
+                    // weight = exp(-dist² / (2 * sigma²)) where sigma ≈ 80cm
+                    // Increased sigma for more realistic smooth neutron diffusion
+                    const sigma = 80;
+                    const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+                    weightedSum += weight * value;
                     weightSum += weight;
                 }
                 

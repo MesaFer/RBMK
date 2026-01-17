@@ -83,26 +83,28 @@ fn load_fuel_channels_from_config() -> Vec<FuelChannel> {
 }
 
 /// Link control rods to fuel channels based on grid position
-/// This allows the physics simulation to use local rod positions for each channel
-fn link_control_rods_to_channels(channels: &mut Vec<FuelChannel>, rods: &[ControlRod]) {
-    // Build a lookup map: (grid_x, grid_y) -> rod index
-    let mut grid_to_rod: HashMap<(i32, i32), usize> = HashMap::new();
-    for (idx, rod) in rods.iter().enumerate() {
-        grid_to_rod.insert((rod.grid_x, rod.grid_y), idx);
-    }
+///
+/// In RBMK, control rods are in SEPARATE channels from fuel channels.
+/// They don't share the same grid position. Control rods affect the
+/// GLOBAL reactivity through total_rod_worth.
+///
+/// For LOCAL effects (hot spots), we don't link rods to channels directly.
+/// Instead, the local_rod_worth is calculated dynamically in step_spatial()
+/// based on distance to nearby rods.
+fn link_control_rods_to_channels(channels: &mut Vec<FuelChannel>, _rods: &[ControlRod]) {
+    // In RBMK, control rods and fuel channels are in different grid positions
+    // We don't link them directly - local effects are calculated dynamically
+    // based on distance to nearby rods in step_spatial()
     
-    // For each channel, check if there's a control rod at the same position
-    let mut linked_count = 0;
+    // All channels start without a linked control rod
     for channel in channels.iter_mut() {
-        if let Some(&rod_idx) = grid_to_rod.get(&(channel.grid_x, channel.grid_y)) {
-            channel.has_control_rod = true;
-            channel.control_rod_id = Some(rod_idx);
-            channel.local_rod_position = 0.0;  // Rods start fully inserted
-            linked_count += 1;
-        }
+        channel.has_control_rod = false;
+        channel.control_rod_id = None;
+        channel.local_rod_position = 1.0;  // No rod = effectively withdrawn
     }
     
-    println!("[reactor] Linked {} control rods to fuel channels", linked_count);
+    println!("[reactor] Control rods not linked to fuel channels (separate grid positions)");
+    println!("[reactor] Local rod effects will be calculated dynamically based on distance");
 }
 
 /// Build neighbor connectivity map for 2D diffusion coupling
@@ -940,27 +942,29 @@ impl ReactorSimulator {
     pub fn move_rod_group(&self, rod_type: RodType, new_position: f64) {
         let clamped_position = new_position.clamp(0.0, 1.0);
         
-        // Collect grid positions of rods being moved
-        let rod_positions: Vec<(i32, i32)> = {
+        // Collect rod IDs being moved
+        let moved_rod_ids: Vec<usize> = {
             let mut rods = self.control_rods.lock().unwrap();
-            let mut positions = Vec::new();
+            let mut ids = Vec::new();
             for rod in rods.iter_mut() {
                 if rod.rod_type == rod_type {
                     rod.position = clamped_position;
-                    positions.push((rod.grid_x, rod.grid_y));
+                    ids.push(rod.id);
                 }
             }
-            positions
+            ids
         };
         
-        // Update fuel channels that have these control rods
-        if !rod_positions.is_empty() {
+        // Update fuel channels that are linked to these control rods
+        if !moved_rod_ids.is_empty() {
             let mut channels = self.fuel_channels.lock().unwrap();
             for channel in channels.iter_mut() {
                 if channel.has_control_rod {
-                    // Check if this channel's rod was moved
-                    if rod_positions.contains(&(channel.grid_x, channel.grid_y)) {
-                        channel.local_rod_position = clamped_position;
+                    // Check if this channel is linked to one of the moved rods
+                    if let Some(rod_id) = channel.control_rod_id {
+                        if moved_rod_ids.contains(&rod_id) {
+                            channel.local_rod_position = clamped_position;
+                        }
                     }
                 }
             }
@@ -972,34 +976,38 @@ impl ReactorSimulator {
     pub fn move_rod_group_by_channel_type(&self, channel_type: &str, new_position: f64) {
         let clamped_position = new_position.clamp(0.0, 1.0);
         
-        // Collect grid positions of rods being moved
-        let rod_positions: Vec<(i32, i32)> = {
+        // Collect rod IDs being moved
+        let moved_rod_ids: Vec<usize> = {
             let mut rods = self.control_rods.lock().unwrap();
-            let mut positions = Vec::new();
+            let mut ids = Vec::new();
             for rod in rods.iter_mut() {
                 if rod.channel_type == channel_type {
                     rod.position = clamped_position;
-                    positions.push((rod.grid_x, rod.grid_y));
+                    ids.push(rod.id);
                 }
             }
-            positions
+            ids
         };
         
-        // Update fuel channels that have these control rods
-        if !rod_positions.is_empty() {
+        // Update fuel channels that are linked to these control rods
+        let mut updated_channels = 0;
+        if !moved_rod_ids.is_empty() {
             let mut channels = self.fuel_channels.lock().unwrap();
             for channel in channels.iter_mut() {
                 if channel.has_control_rod {
-                    // Check if this channel's rod was moved
-                    if rod_positions.contains(&(channel.grid_x, channel.grid_y)) {
-                        channel.local_rod_position = clamped_position;
+                    // Check if this channel is linked to one of the moved rods
+                    if let Some(rod_id) = channel.control_rod_id {
+                        if moved_rod_ids.contains(&rod_id) {
+                            channel.local_rod_position = clamped_position;
+                            updated_channels += 1;
+                        }
                     }
                 }
             }
         }
         
-        println!("[reactor] Moved {} rods of type {} to position {:.1}%",
-                 rod_positions.len(), channel_type, clamped_position * 100.0);
+        println!("[reactor] Moved {} rods of type {} to position {:.1}%, updated {} channels",
+                 moved_rod_ids.len(), channel_type, clamped_position * 100.0, updated_channels);
     }
     
     /// Move a control rod by grid position
@@ -1008,33 +1016,38 @@ impl ReactorSimulator {
     pub fn move_rod_by_grid_position(&self, grid_x: i32, grid_y: i32, new_position: f64) -> bool {
         let clamped_position = new_position.clamp(0.0, 1.0);
         
-        // First, update the control rod
-        let rod_found = {
+        // First, find and update the control rod, get its ID
+        let rod_id: Option<usize> = {
             let mut rods = self.control_rods.lock().unwrap();
-            let mut found = false;
+            let mut found_id = None;
             for rod in rods.iter_mut() {
                 if rod.grid_x == grid_x && rod.grid_y == grid_y {
                     rod.position = clamped_position;
-                    found = true;
+                    found_id = Some(rod.id);
                     break;
                 }
             }
-            found
+            found_id
         };
         
-        if rod_found {
-            // Also update the fuel channel's local_rod_position if it has a control rod
-            let mut channels = self.fuel_channels.lock().unwrap();
-            for channel in channels.iter_mut() {
-                if channel.grid_x == grid_x && channel.grid_y == grid_y && channel.has_control_rod {
-                    channel.local_rod_position = clamped_position;
-                    println!("[reactor] Moved rod at ({}, {}) to position {:.1}% - updated channel",
-                             grid_x, grid_y, clamped_position * 100.0);
-                    return true;
+        if let Some(moved_rod_id) = rod_id {
+            // Update all fuel channels that are linked to this rod
+            let mut updated_channels = 0;
+            {
+                let mut channels = self.fuel_channels.lock().unwrap();
+                for channel in channels.iter_mut() {
+                    if channel.has_control_rod {
+                        if let Some(channel_rod_id) = channel.control_rod_id {
+                            if channel_rod_id == moved_rod_id {
+                                channel.local_rod_position = clamped_position;
+                                updated_channels += 1;
+                            }
+                        }
+                    }
                 }
             }
-            println!("[reactor] Moved rod at ({}, {}) to position {:.1}%",
-                     grid_x, grid_y, clamped_position * 100.0);
+            println!("[reactor] Moved rod {} at ({}, {}) to position {:.1}%, updated {} channels",
+                     moved_rod_id, grid_x, grid_y, clamped_position * 100.0, updated_channels);
             return true;
         }
         
@@ -1132,15 +1145,78 @@ impl ReactorSimulator {
         // Calculate total control rod worth
         let total_rod_worth = self.calculate_total_rod_worth();
         
+        // Build rod position lookup for distance-based calculations
+        // EXCLUDE AZ (emergency) rods from local power calculations
+        // AZ rods are normally fully withdrawn and only used for SCRAM
+        // They should not create hot spots in normal operation
+        let rod_positions: Vec<(i32, i32, f64, f64)> = {
+            let rods = self.control_rods.lock().unwrap();
+            rods.iter()
+                .filter(|r| r.rod_type != RodType::Emergency)  // Exclude AZ rods
+                .map(|r| (r.grid_x, r.grid_y, r.position, r.worth))
+                .collect()
+        };
+        
         // Prepare spatial input data from fuel channels
         let spatial_inputs: Vec<fortran_ffi::SpatialChannelInput> = {
             let channels = self.fuel_channels.lock().unwrap();
+            
             channels.iter().map(|ch| {
                 // Convert neighbor indices to i32, padding with -1
                 let mut neighbors = vec![-1i32; fortran_ffi::MAX_NEIGHBORS];
                 for (i, &n) in ch.neighbors.iter().take(fortran_ffi::MAX_NEIGHBORS).enumerate() {
                     neighbors[i] = n as i32;
                 }
+                
+                // Calculate local rod worth based on distance to nearby rods
+                // This creates local hot spots when a rod is withdrawn
+                //
+                // NEW APPROACH: Calculate the AVERAGE rod position in the neighborhood
+                // This normalizes for edge effects where there are fewer rods nearby
+                //
+                // For each nearby rod, calculate its contribution based on:
+                // 1. Distance (closer = stronger effect)
+                // 2. Rod position (withdrawn = 1.0, inserted = 0.0)
+                //
+                // The effect uses Gaussian decay with distance for smoother gradients
+                let mut weighted_position_sum = 0.0;  // Sum of (position * weight)
+                let mut total_weight = 0.0;           // Sum of weights
+                const MAX_ROD_DISTANCE: i32 = 6;      // Radius for rod influence
+                const SIGMA: f64 = 2.5;               // Gaussian decay parameter
+                
+                for &(rod_x, rod_y, rod_position, _rod_worth) in &rod_positions {
+                    let dx = (ch.grid_x - rod_x).abs();
+                    let dy = (ch.grid_y - rod_y).abs();
+                    let distance = dx + dy;  // Manhattan distance
+                    
+                    if distance <= MAX_ROD_DISTANCE {
+                        // Gaussian decay for smoother effect
+                        let distance_sq = (dx * dx + dy * dy) as f64;
+                        let weight = (-distance_sq / (2.0 * SIGMA * SIGMA)).exp();
+                        
+                        // Accumulate weighted position
+                        // rod_position: 0.0 = inserted, 1.0 = withdrawn
+                        weighted_position_sum += rod_position * weight;
+                        total_weight += weight;
+                    }
+                }
+                
+                // Calculate average rod position in neighborhood (normalized)
+                // avg_position: 0.0 = all rods inserted, 1.0 = all rods withdrawn
+                let avg_rod_position = if total_weight > 0.0 {
+                    weighted_position_sum / total_weight
+                } else {
+                    0.5  // Default to middle if no rods nearby
+                };
+                
+                // Convert to local_rod_worth for Fortran
+                // local_rod_worth = 0.03 when all rods inserted (avg_position = 0)
+                // local_rod_worth = 0.0 when all rods withdrawn (avg_position = 1)
+                //
+                // This creates HOT SPOTS where rods are withdrawn:
+                // - Withdrawn rods (position=1): local_rod_worth = 0 -> high power
+                // - Inserted rods (position=0): local_rod_worth = 0.03 -> normal power
+                let local_rod_worth = 0.03 * (1.0 - avg_rod_position);
                 
                 fortran_ffi::SpatialChannelInput {
                     neutron_flux: ch.neutron_flux,
@@ -1151,21 +1227,7 @@ impl ReactorSimulator {
                     coolant_void: ch.coolant_void,
                     iodine: ch.iodine_135,
                     xenon: ch.xenon_135,
-                    local_rod_worth: if ch.has_control_rod {
-                        // Get rod worth from control rods
-                        let rods = self.control_rods.lock().unwrap();
-                        if let Some(rod_id) = ch.control_rod_id {
-                            if let Some(rod) = rods.get(rod_id) {
-                                rod.worth * (1.0 - rod.position)
-                            } else {
-                                0.0
-                            }
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    },
+                    local_rod_worth,
                     x: ch.x,
                     y: ch.y,
                     neighbors,
