@@ -54,12 +54,12 @@ contains
         ! Iodine-135 production and decay
         ! Production: gamma_I * F (6.1% of fissions produce I-135)
         ! Decay: lambda_I * I (half-life 6.57 hours)
-        dI_dt = GAMMA_I * fission_rate_density - LAMBDA_I * iodine
+        dI_dt = GAMMA_IODINE * fission_rate_density - LAMBDA_IODINE * iodine
         
         ! Xenon-135 production and removal
         ! Production: gamma_Xe * F (0.3% direct) + lambda_I * I (from iodine decay)
         ! Removal: lambda_Xe * Xe (decay, half-life 9.2 hours) + sigma_Xe * phi * Xe (burnup)
-        dXe_dt = GAMMA_XE * fission_rate_density + LAMBDA_I * iodine - &
+        dXe_dt = GAMMA_XE * fission_rate_density + LAMBDA_IODINE * iodine - &
                  LAMBDA_XE * xenon - SIGMA_XE * neutron_flux * xenon
         
         ! Update concentrations (simple Euler)
@@ -101,11 +101,11 @@ contains
         fission_rate_density = NOMINAL_FISSION_RATE * power_fraction
         
         ! Equilibrium I-135: dI/dt = 0 => I_eq = γ_I * F / λ_I
-        eq_iodine = GAMMA_I * fission_rate_density / LAMBDA_I
+        eq_iodine = GAMMA_IODINE * fission_rate_density / LAMBDA_IODINE
         
         ! Equilibrium Xe-135: dXe/dt = 0
         ! Xe_eq = (γ_Xe * F + λ_I * I_eq) / (λ_Xe + σ_Xe * φ)
-        eq_xenon = (GAMMA_XE * fission_rate_density + LAMBDA_I * eq_iodine) / &
+        eq_xenon = (GAMMA_XE * fission_rate_density + LAMBDA_IODINE * eq_iodine) / &
                    (LAMBDA_XE + SIGMA_XE * flux)
         
     end subroutine calculate_equilibrium_xenon

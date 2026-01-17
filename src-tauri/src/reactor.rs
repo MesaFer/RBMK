@@ -459,7 +459,32 @@ pub mod constants {
     pub const CORE_RADIUS_CM: f64 = 593.0;
     pub const NUM_CONTROL_RODS: usize = 211;
     pub const BETA_EFF: f64 = 0.0065;
+    /// Prompt neutron lifetime for RBMK (graphite-moderated)
+    /// RBMK has longer lifetime (~1ms) compared to LWR (~0.1ms)
     pub const NEUTRON_LIFETIME: f64 = 1.0e-3; // seconds
+    
+    /// Number of delayed neutron groups
+    pub const NUM_DELAYED_GROUPS: usize = 6;
+    
+    /// 6-group delayed neutron fractions (βᵢ) for U-235
+    pub const BETA_I: [f64; NUM_DELAYED_GROUPS] = [
+        0.000215,  // Group 1
+        0.001424,  // Group 2
+        0.001274,  // Group 3
+        0.002568,  // Group 4
+        0.000748,  // Group 5
+        0.000273,  // Group 6
+    ];
+    
+    /// 6-group decay constants (λᵢ) in s⁻¹ for U-235
+    pub const LAMBDA_I: [f64; NUM_DELAYED_GROUPS] = [
+        0.0124,    // Group 1, T₁/₂ = 55.9s
+        0.0305,    // Group 2, T₁/₂ = 22.7s
+        0.111,     // Group 3, T₁/₂ = 6.24s
+        0.301,     // Group 4, T₁/₂ = 2.30s
+        1.14,      // Group 5, T₁/₂ = 0.61s
+        3.01,      // Group 6, T₁/₂ = 0.23s
+    ];
 }
 
 /// State of a single fuel channel with independent parameters
@@ -574,7 +599,18 @@ pub struct ReactorState {
     pub power_mw: f64,       // Thermal power [MW]
     pub power_percent: f64,  // Power as % of nominal
     pub neutron_population: f64,
-    pub precursors: f64,     // Delayed neutron precursors
+    pub precursors: f64,     // Total delayed neutron precursors (sum of 6 groups)
+    
+    /// 6-group delayed neutron precursor concentrations
+    /// Each group has different decay constant and fraction:
+    /// - Group 1: β₁=0.000215, λ₁=0.0124 s⁻¹, T₁/₂=55.9s (longest-lived)
+    /// - Group 2: β₂=0.001424, λ₂=0.0305 s⁻¹, T₁/₂=22.7s
+    /// - Group 3: β₃=0.001274, λ₃=0.111 s⁻¹, T₁/₂=6.24s
+    /// - Group 4: β₄=0.002568, λ₄=0.301 s⁻¹, T₁/₂=2.30s (largest fraction)
+    /// - Group 5: β₅=0.000748, λ₅=1.14 s⁻¹, T₁/₂=0.61s
+    /// - Group 6: β₆=0.000273, λ₆=3.01 s⁻¹, T₁/₂=0.23s (shortest-lived)
+    pub precursors_6: [f64; constants::NUM_DELAYED_GROUPS],
+    
     pub k_eff: f64,          // Effective multiplication factor
     pub reactivity: f64,     // Total reactivity [Δk/k]
     pub reactivity_dollars: f64, // Reactivity in dollars
@@ -627,6 +663,7 @@ impl Default for ReactorState {
             power_percent: 0.0,      // Shutdown - 0%
             neutron_population: 1e-6, // Very low neutron source (subcritical)
             precursors: 0.0,         // No precursors - fresh start
+            precursors_6: [0.0; constants::NUM_DELAYED_GROUPS], // All 6 groups at zero
             k_eff: 0.95,             // Subcritical
             reactivity: -0.05,       // Negative reactivity (subcritical)
             reactivity_dollars: -7.7, // About -7.7$ (deeply subcritical)
@@ -1422,6 +1459,9 @@ impl ReactorSimulator {
     pub fn reset(&self) {
         // Reset Fortran explosion tracking state
         fortran_ffi::reset_explosion_state();
+        
+        // Reset Fortran 6-group precursor state
+        fortran_ffi::reset_precursors_6group_state();
         
         let mut state = self.state.lock().unwrap();
         *state = ReactorState::default();

@@ -491,13 +491,13 @@ contains
         ! Iodine-135 dynamics
         ! dI/dt = γ_I * F - λ_I * I
         ! where F is fission rate density [fissions/(cm³·s)]
-        di_dt = GAMMA_I * fission_rate_density - LAMBDA_I * iodine_in
+        di_dt = GAMMA_IODINE * fission_rate_density - LAMBDA_IODINE * iodine_in
         iodine_out = iodine_in + di_dt * dt
         iodine_out = max(0.0d0, min(1.0d17, iodine_out))
         
         ! Xenon-135 dynamics
         ! dXe/dt = γ_Xe * F + λ_I * I - λ_Xe * Xe - σ_Xe * φ * Xe
-        dxe_dt = GAMMA_XE * fission_rate_density + LAMBDA_I * iodine_in &
+        dxe_dt = GAMMA_XE * fission_rate_density + LAMBDA_IODINE * iodine_in &
                - LAMBDA_XE * xenon_in - SIGMA_XE * flux_scaled * xenon_in
         xenon_out = xenon_in + dxe_dt * dt
         xenon_out = max(0.0d0, min(1.0d16, xenon_out))

@@ -88,3 +88,4 @@ logs/
 *.temp
 .cache/
 PROJECT_COMPLEXITY_ANALYSIS.md
+snapshot.md

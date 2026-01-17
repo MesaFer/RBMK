@@ -101,6 +101,46 @@ type SolvePointKineticsRk4 = unsafe extern "C" fn(
     fuel_temp_new: *mut f64,
 );
 
+/// Number of delayed neutron groups
+pub const NUM_DELAYED_GROUPS: usize = 6;
+
+/// 6-group point kinetics solver type
+type SolvePointKinetics6Group = unsafe extern "C" fn(
+    n_neutrons: f64,
+    precursors_6: *const f64,  // Array of 6 precursor concentrations
+    fuel_temp: f64,
+    reactivity: f64,
+    source_term: f64,
+    dt: f64,
+    n_new: *mut f64,
+    precursors_6_new: *mut f64,  // Array of 6 new precursor concentrations
+    fuel_temp_new: *mut f64,
+);
+
+/// Initialize 6-group precursors for steady state
+type InitPrecursors6Group = unsafe extern "C" fn(
+    n_neutrons: f64,
+    precursors_6: *mut f64,  // Output array of 6 precursor concentrations
+);
+
+/// Sum 6-group precursors to get total
+type SumPrecursors6Group = unsafe extern "C" fn(
+    precursors_6: *const f64,
+    total: *mut f64,
+);
+
+/// Calculate reactor period
+type CalculateReactorPeriod = unsafe extern "C" fn(
+    reactivity: f64,
+    period: *mut f64,
+);
+
+/// Convert reactivity to dollars
+type ReactivityToDollars = unsafe extern "C" fn(
+    reactivity: f64,
+    dollars: *mut f64,
+);
+
 type CalculateXenonDynamics = unsafe extern "C" fn(
     iodine: f64,
     xenon: f64,
@@ -172,6 +212,14 @@ type GetConstants = unsafe extern "C" fn(
 );
 
 type ResetExplosionState = unsafe extern "C" fn();
+
+/// Reset 6-group precursor state in simulation module
+type ResetPrecursors6GroupState = unsafe extern "C" fn();
+
+/// Get current 6-group precursor concentrations
+type GetPrecursors6Group = unsafe extern "C" fn(
+    precursors_out: *mut f64,
+);
 
 // ============================================================================
 // Library initialization
@@ -479,6 +527,120 @@ pub fn solve_kinetics_rk4(
     (n_new, c_new, t_new)
 }
 
+/// Solve 6-group point kinetics equations with RK4 and temperature feedback
+///
+/// This is the physically accurate solver using 6 delayed neutron groups:
+/// - Group 1: β₁=0.000215, λ₁=0.0124 s⁻¹, T₁/₂=55.9s
+/// - Group 2: β₂=0.001424, λ₂=0.0305 s⁻¹, T₁/₂=22.7s
+/// - Group 3: β₃=0.001274, λ₃=0.111 s⁻¹, T₁/₂=6.24s
+/// - Group 4: β₄=0.002568, λ₄=0.301 s⁻¹, T₁/₂=2.30s
+/// - Group 5: β₅=0.000748, λ₅=1.14 s⁻¹, T₁/₂=0.61s
+/// - Group 6: β₆=0.000273, λ₆=3.01 s⁻¹, T₁/₂=0.23s
+///
+/// Total β ≈ 0.0065 (defines 1 dollar of reactivity)
+pub fn solve_kinetics_6group(
+    n_neutrons: f64,
+    precursors_6: &[f64; NUM_DELAYED_GROUPS],
+    fuel_temp: f64,
+    reactivity: f64,
+    source_term: f64,
+    dt: f64,
+) -> (f64, [f64; NUM_DELAYED_GROUPS], f64) {
+    let lib = get_library();
+    let mut n_new: f64 = 0.0;
+    let mut c_new: [f64; NUM_DELAYED_GROUPS] = [0.0; NUM_DELAYED_GROUPS];
+    let mut t_new: f64 = 0.0;
+    
+    unsafe {
+        let func: Symbol<SolvePointKinetics6Group> = lib
+            .get(b"solve_point_kinetics_6group")
+            .expect("Failed to load solve_point_kinetics_6group");
+        
+        func(
+            n_neutrons,
+            precursors_6.as_ptr(),
+            fuel_temp,
+            reactivity,
+            source_term,
+            dt,
+            &mut n_new,
+            c_new.as_mut_ptr(),
+            &mut t_new,
+        );
+    }
+    
+    (n_new, c_new, t_new)
+}
+
+/// Initialize 6-group precursor concentrations for steady state
+///
+/// At steady state: dCᵢ/dt = 0 => Cᵢ = βᵢ·n / (λᵢ·Λ)
+pub fn init_precursors_6group(n_neutrons: f64) -> [f64; NUM_DELAYED_GROUPS] {
+    let lib = get_library();
+    let mut precursors: [f64; NUM_DELAYED_GROUPS] = [0.0; NUM_DELAYED_GROUPS];
+    
+    unsafe {
+        let func: Symbol<InitPrecursors6Group> = lib
+            .get(b"init_precursors_6group")
+            .expect("Failed to load init_precursors_6group");
+        
+        func(n_neutrons, precursors.as_mut_ptr());
+    }
+    
+    precursors
+}
+
+/// Sum 6-group precursor concentrations to get total
+pub fn sum_precursors_6group(precursors_6: &[f64; NUM_DELAYED_GROUPS]) -> f64 {
+    let lib = get_library();
+    let mut total: f64 = 0.0;
+    
+    unsafe {
+        let func: Symbol<SumPrecursors6Group> = lib
+            .get(b"sum_precursors_6group")
+            .expect("Failed to load sum_precursors_6group");
+        
+        func(precursors_6.as_ptr(), &mut total);
+    }
+    
+    total
+}
+
+/// Calculate reactor period from reactivity
+///
+/// For delayed supercritical: T ≈ (β - ρ) / (λ_eff · ρ)
+/// For prompt supercritical: T ≈ Λ / (ρ - β)
+pub fn calculate_reactor_period(reactivity: f64) -> f64 {
+    let lib = get_library();
+    let mut period: f64 = 0.0;
+    
+    unsafe {
+        let func: Symbol<CalculateReactorPeriod> = lib
+            .get(b"calculate_reactor_period")
+            .expect("Failed to load calculate_reactor_period");
+        
+        func(reactivity, &mut period);
+    }
+    
+    period
+}
+
+/// Convert reactivity to dollars (1$ = β_eff ≈ 0.0065)
+pub fn reactivity_to_dollars(reactivity: f64) -> f64 {
+    let lib = get_library();
+    let mut dollars: f64 = 0.0;
+    
+    unsafe {
+        let func: Symbol<ReactivityToDollars> = lib
+            .get(b"reactivity_to_dollars")
+            .expect("Failed to load reactivity_to_dollars");
+        
+        func(reactivity, &mut dollars);
+    }
+    
+    dollars
+}
+
 /// Calculate xenon and iodine dynamics
 pub fn calc_xenon(
     iodine: f64,
@@ -700,6 +862,37 @@ pub fn reset_explosion_state() {
         
         func();
     }
+}
+
+/// Reset 6-group precursor state in Fortran simulation module
+/// This should be called when resetting the simulation to clear internal state
+pub fn reset_precursors_6group_state() {
+    let lib = get_library();
+    
+    unsafe {
+        let func: Symbol<ResetPrecursors6GroupState> = lib
+            .get(b"reset_precursors_6group_state")
+            .expect("Failed to load reset_precursors_6group_state");
+        
+        func();
+    }
+}
+
+/// Get current 6-group precursor concentrations from Fortran simulation module
+/// Useful for diagnostics and UI display
+pub fn get_precursors_6group() -> [f64; NUM_DELAYED_GROUPS] {
+    let lib = get_library();
+    let mut precursors: [f64; NUM_DELAYED_GROUPS] = [0.0; NUM_DELAYED_GROUPS];
+    
+    unsafe {
+        let func: Symbol<GetPrecursors6Group> = lib
+            .get(b"get_precursors_6group")
+            .expect("Failed to load get_precursors_6group");
+        
+        func(precursors.as_mut_ptr());
+    }
+    
+    precursors
 }
 
 // ============================================================================

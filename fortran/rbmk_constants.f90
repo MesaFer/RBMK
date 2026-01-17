@@ -7,16 +7,56 @@ module rbmk_constants
     use iso_c_binding
     implicit none
     
+    ! Number of delayed neutron groups
+    integer, parameter :: NUM_DELAYED_GROUPS = 6
+    
     ! Physical constants
+    ! RBMK is a graphite-moderated reactor with relatively long neutron lifetime
+    ! Typical values: 1.0e-3 s (graphite) vs 1.0e-4 s (LWR)
     real(c_double), parameter :: NEUTRON_LIFETIME = 1.0d-3      ! Prompt neutron lifetime [s]
-    real(c_double), parameter :: BETA_EFF = 0.0065d0            ! Effective delayed neutron fraction
-    real(c_double), parameter :: LAMBDA_DECAY = 0.0767d0        ! Decay constant for delayed neutrons [1/s]
+    real(c_double), parameter :: BETA_EFF = 0.0065d0            ! Total effective delayed neutron fraction (U-235)
+    
+    ! 6-group delayed neutron parameters for U-235 thermal fission
+    ! βᵢ - delayed neutron fraction for group i
+    ! λᵢ - decay constant for group i [1/s]
+    ! T₁/₂ = ln(2)/λᵢ - half-life [s]
+    !
+    ! Group  βᵢ        λᵢ (s⁻¹)   T₁/₂ (s)
+    ! 1      0.000215  0.0124     55.9
+    ! 2      0.001424  0.0305     22.7
+    ! 3      0.001274  0.111      6.24
+    ! 4      0.002568  0.301      2.30
+    ! 5      0.000748  1.14       0.61
+    ! 6      0.000273  3.01       0.23
+    
+    real(c_double), parameter :: BETA_1 = 0.000215d0
+    real(c_double), parameter :: BETA_2 = 0.001424d0
+    real(c_double), parameter :: BETA_3 = 0.001274d0
+    real(c_double), parameter :: BETA_4 = 0.002568d0
+    real(c_double), parameter :: BETA_5 = 0.000748d0
+    real(c_double), parameter :: BETA_6 = 0.000273d0
+    
+    real(c_double), parameter :: LAMBDA_1 = 0.0124d0
+    real(c_double), parameter :: LAMBDA_2 = 0.0305d0
+    real(c_double), parameter :: LAMBDA_3 = 0.111d0
+    real(c_double), parameter :: LAMBDA_4 = 0.301d0
+    real(c_double), parameter :: LAMBDA_5 = 1.14d0
+    real(c_double), parameter :: LAMBDA_6 = 3.01d0
+    
+    ! Arrays for convenient iteration
+    real(c_double), dimension(NUM_DELAYED_GROUPS), parameter :: BETA_I = &
+        (/ BETA_1, BETA_2, BETA_3, BETA_4, BETA_5, BETA_6 /)
+    real(c_double), dimension(NUM_DELAYED_GROUPS), parameter :: LAMBDA_I = &
+        (/ LAMBDA_1, LAMBDA_2, LAMBDA_3, LAMBDA_4, LAMBDA_5, LAMBDA_6 /)
+    
+    ! Legacy single-group approximation (weighted average for compatibility)
+    real(c_double), parameter :: LAMBDA_DECAY = 0.0767d0        ! Effective decay constant [1/s]
     
     ! Xenon/Iodine constants
     real(c_double), parameter :: SIGMA_XE = 2.65d-18            ! Xenon-135 absorption cross-section [cm^2]
     real(c_double), parameter :: LAMBDA_XE = 2.09d-5            ! Xenon-135 decay constant [1/s]
-    real(c_double), parameter :: LAMBDA_I = 2.87d-5             ! Iodine-135 decay constant [1/s]
-    real(c_double), parameter :: GAMMA_I = 0.061d0              ! Iodine-135 fission yield
+    real(c_double), parameter :: LAMBDA_IODINE = 2.87d-5        ! Iodine-135 decay constant [1/s]
+    real(c_double), parameter :: GAMMA_IODINE = 0.061d0         ! Iodine-135 fission yield
     real(c_double), parameter :: GAMMA_XE = 0.003d0             ! Direct Xenon-135 fission yield
     real(c_double), parameter :: SIGMA_F = 0.0025d0             ! Fission cross-section [1/cm]
     

@@ -1,14 +1,14 @@
 /**
  * RBMK-1000 Reactor 2D Projection View
- * 
+ *
  * Displays a top-down 2D view of the reactor core for:
  * - Thermal hotspot visualization
  * - Power distribution analysis
  * - Control rod positions
  * - Channel status monitoring
- * 
- * Now supports all 1661 fuel channels with synchronized parameters.
- * Each channel can display its own temperature/flux values (currently synchronized).
+ *
+ * Supports all 1661 fuel channels with independent per-channel parameters.
+ * Each channel has its own temperature/flux/xenon values from 2D spatial physics.
  */
 
 import {

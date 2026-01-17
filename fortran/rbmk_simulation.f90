@@ -14,10 +14,15 @@ module rbmk_simulation
     use rbmk_safety
     implicit none
     
+    ! Module-level storage for 6-group precursor concentrations
+    ! These persist between simulation steps
+    real(c_double), save :: precursors_6_state(NUM_DELAYED_GROUPS) = 0.0d0
+    logical, save :: precursors_initialized = .false.
+    
 contains
 
     ! =========================================================================
-    ! Perform one complete simulation step
+    ! Perform one complete simulation step with 6-group kinetics
     ! This is the main entry point called from Rust
     ! =========================================================================
     subroutine simulation_step( &
@@ -74,6 +79,14 @@ contains
         ! Local variables
         real(c_double) :: avg_flux, dn_dt_actual, reactivity_dollars
         real(c_double) :: fuel_temp_kinetics
+        real(c_double) :: precursors_6_new(NUM_DELAYED_GROUPS)
+        real(c_double) :: source_term
+        
+        ! Initialize 6-group precursors on first call or if reset
+        if (.not. precursors_initialized .or. precursors < 1.0d-10) then
+            call init_precursors_6group(neutron_population, precursors_6_state)
+            precursors_initialized = .true.
+        end if
         
         ! Step 1: Calculate total reactivity with all feedback effects
         call calculate_total_reactivity( &
@@ -92,10 +105,23 @@ contains
             end if
         end if
         
-        ! Step 3: Solve point kinetics with RK4
-        call solve_point_kinetics_rk4( &
-            neutron_population, precursors, fuel_temp, reactivity_new, dt, &
-            neutron_population_new, precursors_new, fuel_temp_kinetics)
+        ! Step 3: Solve point kinetics with 6-group RK4
+        ! External source term (for subcritical startup)
+        source_term = 0.0d0
+        if (neutron_population < 1.0d-4) then
+            source_term = 1.0d-8  ! Small neutron source for startup
+        end if
+        
+        call solve_point_kinetics_6group( &
+            neutron_population, precursors_6_state, fuel_temp, reactivity_new, &
+            source_term, dt, &
+            neutron_population_new, precursors_6_new, fuel_temp_kinetics)
+        
+        ! Update stored 6-group precursors
+        precursors_6_state = precursors_6_new
+        
+        ! Calculate total precursors for output (sum of all 6 groups)
+        call sum_precursors_6group(precursors_6_new, precursors_new)
         
         ! Step 4: Calculate power
         call calculate_thermal_power(neutron_population_new, 1.0d0, power_mw)
@@ -158,5 +184,28 @@ contains
         nominal_power_out = NOMINAL_POWER
         
     end subroutine get_constants
+    
+    ! =========================================================================
+    ! Reset 6-group precursor state (called when simulation is reset)
+    ! =========================================================================
+    subroutine reset_precursors_6group_state() bind(C, name="reset_precursors_6group_state")
+        integer :: g
+        
+        do g = 1, NUM_DELAYED_GROUPS
+            precursors_6_state(g) = 0.0d0
+        end do
+        precursors_initialized = .false.
+        
+    end subroutine reset_precursors_6group_state
+    
+    ! =========================================================================
+    ! Get current 6-group precursor concentrations (for diagnostics/UI)
+    ! =========================================================================
+    subroutine get_precursors_6group(precursors_out) bind(C, name="get_precursors_6group")
+        real(c_double), intent(out) :: precursors_out(NUM_DELAYED_GROUPS)
+        
+        precursors_out = precursors_6_state
+        
+    end subroutine get_precursors_6group
 
 end module rbmk_simulation

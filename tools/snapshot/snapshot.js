@@ -198,6 +198,14 @@ function readFileContent(filePath) {
 }
 
 /**
+ * Count lines in a string
+ */
+function countLines(content) {
+    if (!content) return 0;
+    return content.split('\n').length;
+}
+
+/**
  * Create a snapshot of the codebase
  */
 function createSnapshot(targetDir, options = {}) {
@@ -205,7 +213,8 @@ function createSnapshot(targetDir, options = {}) {
         ignorePatterns = DEFAULT_IGNORE,
         extensions = null,
         includeEmpty = false,
-        outputFormat = 'markdown'
+        outputFormat = 'markdown',
+        maxLines = null  // null means no limit
     } = options;
     
     const baseDir = path.resolve(targetDir);
@@ -215,6 +224,8 @@ function createSnapshot(targetDir, options = {}) {
     files.sort((a, b) => a.path.localeCompare(b.path));
     
     let output = '';
+    let includedCount = 0;
+    const skippedFiles = [];
     
     for (const file of files) {
         const content = readFileContent(file.fullPath);
@@ -223,6 +234,17 @@ function createSnapshot(targetDir, options = {}) {
         if (!includeEmpty && content.trim() === '') {
             continue;
         }
+        
+        // Skip files exceeding maxLines limit
+        if (maxLines !== null) {
+            const lineCount = countLines(content);
+            if (lineCount > maxLines) {
+                skippedFiles.push({ path: file.path, lines: lineCount });
+                continue;
+            }
+        }
+        
+        includedCount++;
         
         if (outputFormat === 'markdown') {
             output += `${file.path}\n`;
@@ -242,10 +264,18 @@ function createSnapshot(targetDir, options = {}) {
         }
     }
     
+    // Build list of included files (excluding skipped ones)
+    const skippedPaths = new Set(skippedFiles.map(f => f.path));
+    const includedFiles = files
+        .filter(f => !skippedPaths.has(f.path))
+        .map(f => f.path);
+    
     return {
         output,
-        fileCount: files.length,
-        files: files.map(f => f.path)
+        fileCount: includedCount,
+        totalFiles: files.length,
+        skippedFiles,
+        files: includedFiles
     };
 }
 
@@ -267,6 +297,7 @@ Options:
   -e, --ext <extensions>  Filter by extensions (comma-separated, e.g., ".js,.ts")
   -i, --ignore <patterns> Additional ignore patterns (comma-separated)
   -f, --format <format>   Output format: markdown (default) or plain
+  -m, --max-lines <num>   Skip files with more than <num> lines (default: no limit)
   --include-empty         Include empty files
   --list                  Only list files, don't output content
   -h, --help              Show this help message
@@ -276,6 +307,7 @@ Examples:
   node snapshot.js ./src -o snapshot.md
   node snapshot.js ./src -e ".js,.ts" -o snapshot.md
   node snapshot.js . --ignore "test,spec" -o snapshot.md
+  node snapshot.js . --max-lines 5000 -o snapshot.md
 `);
         process.exit(0);
     }
@@ -285,7 +317,8 @@ Examples:
         ignorePatterns: [...DEFAULT_IGNORE],
         extensions: null,
         includeEmpty: false,
-        outputFormat: 'markdown'
+        outputFormat: 'markdown',
+        maxLines: null
     };
     
     let outputFile = null;
@@ -303,6 +336,12 @@ Examples:
             options.ignorePatterns.push(...args[++i].split(',').map(p => p.trim()));
         } else if (arg === '-f' || arg === '--format') {
             options.outputFormat = args[++i];
+        } else if (arg === '-m' || arg === '--max-lines') {
+            options.maxLines = parseInt(args[++i], 10);
+            if (isNaN(options.maxLines) || options.maxLines <= 0) {
+                console.error('Error: --max-lines must be a positive integer');
+                process.exit(1);
+            }
         } else if (arg === '--include-empty') {
             options.includeEmpty = true;
         } else if (arg === '--list') {
@@ -319,12 +358,23 @@ Examples:
     const result = createSnapshot(targetDir, options);
     
     if (listOnly) {
-        console.log(`Found ${result.fileCount} files:\n`);
+        console.log(`Found ${result.fileCount} files (${result.totalFiles} total, ${result.skippedFiles.length} skipped):\n`);
         result.files.forEach(f => console.log(`  ${f}`));
+        if (result.skippedFiles.length > 0 && options.maxLines) {
+            console.log(`\nSkipped ${result.skippedFiles.length} files exceeding ${options.maxLines} lines:`);
+            result.skippedFiles.forEach(f => console.log(`  ${f.path} (${f.lines} lines)`));
+        }
     } else {
         if (outputFile) {
             fs.writeFileSync(outputFile, result.output, 'utf-8');
-            console.log(`Snapshot written to ${outputFile} (${result.fileCount} files)`);
+            let message = `Snapshot written to ${outputFile} (${result.fileCount} files)`;
+            if (result.skippedFiles.length > 0) {
+                message += `\nSkipped ${result.skippedFiles.length} files exceeding ${options.maxLines} lines:`;
+                result.skippedFiles.forEach(f => {
+                    message += `\n  ${f.path} (${f.lines} lines)`;
+                });
+            }
+            console.log(message);
         } else {
             console.log(result.output);
         }
