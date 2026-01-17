@@ -67,14 +67,72 @@ fn load_fuel_channels_from_config() -> Vec<FuelChannel> {
     for path in &config_paths {
         if let Ok(content) = fs::read_to_string(path) {
             if let Ok(config) = serde_json::from_str::<LayoutConfig>(&content) {
-                return create_channels_from_config(&config);
+                let mut channels = create_channels_from_config(&config);
+                // Build neighbor connectivity map for 2D diffusion
+                build_neighbor_map(&mut channels);
+                return channels;
             }
         }
     }
     
     // Fallback: generate default circular grid if config not found
     eprintln!("[reactor] Warning: Could not load layout config, using fallback circular grid");
-    create_fallback_channels()
+    let mut channels = create_fallback_channels();
+    build_neighbor_map(&mut channels);
+    channels
+}
+
+/// Build neighbor connectivity map for 2D diffusion coupling
+/// 
+/// For each fuel channel, finds neighboring channels based on grid position.
+/// Uses 4-connectivity (von Neumann neighborhood): up, down, left, right.
+/// Neighbors are channels that are exactly 1 grid cell apart.
+/// 
+/// This connectivity is essential for:
+/// - 2D neutron diffusion (flux exchange between neighbors)
+/// - Thermal conduction through graphite
+/// - Local xenon redistribution effects
+fn build_neighbor_map(channels: &mut Vec<FuelChannel>) {
+    // Build a lookup map: (grid_x, grid_y) -> channel index
+    let mut grid_to_index: HashMap<(i32, i32), usize> = HashMap::new();
+    for (idx, channel) in channels.iter().enumerate() {
+        grid_to_index.insert((channel.grid_x, channel.grid_y), idx);
+    }
+    
+    // For each channel, find its neighbors
+    // Using 4-connectivity (von Neumann neighborhood)
+    let neighbor_offsets: [(i32, i32); 4] = [
+        (0, -1),  // Up
+        (0, 1),   // Down
+        (-1, 0),  // Left
+        (1, 0),   // Right
+    ];
+    
+    // We need to collect neighbor info first, then apply it
+    // (to avoid borrowing issues)
+    let neighbor_lists: Vec<Vec<usize>> = channels.iter().map(|channel| {
+        let mut neighbors = Vec::new();
+        for (dx, dy) in &neighbor_offsets {
+            let neighbor_pos = (channel.grid_x + dx, channel.grid_y + dy);
+            if let Some(&neighbor_idx) = grid_to_index.get(&neighbor_pos) {
+                neighbors.push(neighbor_idx);
+            }
+        }
+        neighbors
+    }).collect();
+    
+    // Apply neighbor lists to channels
+    for (channel, neighbors) in channels.iter_mut().zip(neighbor_lists.into_iter()) {
+        channel.neighbors = neighbors;
+    }
+    
+    // Statistics
+    let total_neighbors: usize = channels.iter().map(|c| c.neighbors.len()).sum();
+    let avg_neighbors = total_neighbors as f64 / channels.len() as f64;
+    let edge_channels = channels.iter().filter(|c| c.neighbors.len() < 4).count();
+    
+    println!("[reactor] Built neighbor map: {} channels, {:.2} avg neighbors, {} edge channels",
+             channels.len(), avg_neighbors, edge_channels);
 }
 
 /// Default values for RBMK-1000 fuel channel parameters (cold shutdown state)

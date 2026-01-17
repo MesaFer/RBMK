@@ -41,9 +41,24 @@ export interface FuelChannelData {
     y: number;
     fuel_temp: number;
     coolant_temp: number;
+    graphite_temp: number;
     coolant_void: number;
+    pressure: number;
+    flow_rate: number;
+    inlet_temp: number;
+    outlet_temp: number;
     neutron_flux: number;
+    power_density: number;
+    local_power: number;
+    iodine_135: number;
+    xenon_135: number;
     burnup: number;
+    enrichment: number;
+    has_control_rod: boolean;
+    control_rod_id: number | null;
+    local_rod_position: number;
+    neighbors: number[];
+    local_reactivity: number;
 }
 
 // Visualization modes for 2D projection

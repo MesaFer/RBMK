@@ -416,6 +416,64 @@
             color: white;
         }
         
+        /* Heatmap styles */
+        #heatmap-container {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            background: #0a0a15;
+        }
+        
+        #heatmap-container.active {
+            display: flex;
+        }
+        
+        #heatmap-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+            flex-wrap: wrap;
+        }
+        
+        #heatmap-canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #heatmapCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        .heatmap-mode-btn {
+            padding: 6px 10px;
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        
+        .heatmap-mode-btn:hover {
+            background: #1a4a7a;
+            color: white;
+        }
+        
+        .heatmap-mode-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: white;
+        }
+        
         #view-controls {
             position: absolute;
             top: 10px;
@@ -708,6 +766,7 @@
             <div id="main-tabs">
                 <button class="main-tab active" data-tab="3d">🔬 3D Model</button>
                 <button class="main-tab" data-tab="2d">📐 2D Projection</button>
+                <button class="main-tab" data-tab="heatmap">🔥 Heatmap</button>
                 <button class="main-tab" data-tab="graphs">📊 Graphs</button>
             </div>
             
@@ -771,6 +830,23 @@
                 </div>
                 <div id="projection-2d-canvas-container">
                     <canvas id="projection2dCanvas"></canvas>
+                </div>
+            </div>
+            
+            <!-- Heatmap Container -->
+            <div id="heatmap-container">
+                <div id="heatmap-toolbar">
+                    <span class="toolbar-label">Heatmap Mode:</span>
+                    <button class="heatmap-mode-btn active" data-mode="fuel_temp">🌡️ Fuel Temp</button>
+                    <button class="heatmap-mode-btn" data-mode="coolant_temp">💧 Coolant</button>
+                    <button class="heatmap-mode-btn" data-mode="graphite_temp">🧱 Graphite</button>
+                    <button class="heatmap-mode-btn" data-mode="power">🔥 Power</button>
+                    <button class="heatmap-mode-btn" data-mode="void_fraction">💨 Void</button>
+                    <button class="heatmap-mode-btn" data-mode="xenon">☢️ Xenon</button>
+                    <button class="heatmap-mode-btn" data-mode="local_reactivity">⚛️ Reactivity</button>
+                </div>
+                <div id="heatmap-canvas-container">
+                    <canvas id="heatmapCanvas"></canvas>
                 </div>
             </div>
             

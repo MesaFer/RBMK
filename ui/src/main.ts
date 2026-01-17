@@ -8,6 +8,7 @@ import { ReactorVisualization, Reactor3DData, ControlRod } from './visualization
 import { ChannelType } from './rbmk_core_layout';
 import { ReactorGraphs } from './graphs';
 import { Reactor2DProjection, Visualization2DMode, FuelChannelData } from './reactor_2d';
+import { ReactorHeatmap, HeatmapMode } from './reactor_heatmap';
 
 // Auto regulator settings interface
 interface AutoRegulatorSettings {
@@ -60,10 +61,11 @@ class RBMKSimulator {
     private visualization: ReactorVisualization | null = null;
     private graphs: ReactorGraphs | null = null;
     private projection2D: Reactor2DProjection | null = null;
+    private heatmap: ReactorHeatmap | null = null;
     private state: ReactorState | null = null;
     
     // Current view tab
-    private currentTab: '3d' | '2d' | 'graphs' = '3d';
+    private currentTab: '3d' | '2d' | 'heatmap' | 'graphs' = '3d';
     
     // Real-time simulation properties
     // Start date: April 20, 1986 at 00:00:00 (midnight)
@@ -128,6 +130,16 @@ class RBMKSimulator {
             }
         }
         
+        // Initialize Heatmap (async - loads layout config from JSON)
+        const heatmapCanvas = document.getElementById('heatmapCanvas') as HTMLCanvasElement;
+        if (heatmapCanvas) {
+            try {
+                this.heatmap = await ReactorHeatmap.create(heatmapCanvas);
+            } catch (e) {
+                console.error('Failed to create heatmap:', e);
+            }
+        }
+        
         // Get initial state
         await this.updateState();
         
@@ -154,6 +166,16 @@ class RBMKSimulator {
                 document.querySelectorAll('.viz-mode-btn').forEach(b => b.classList.remove('active'));
                 (e.target as HTMLElement).classList.add('active');
                 this.projection2D?.setMode(mode);
+            });
+        });
+        
+        // Heatmap mode buttons
+        document.querySelectorAll('.heatmap-mode-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const mode = (e.target as HTMLElement).dataset.mode as HeatmapMode;
+                document.querySelectorAll('.heatmap-mode-btn').forEach(b => b.classList.remove('active'));
+                (e.target as HTMLElement).classList.add('active');
+                this.heatmap?.setMode(mode);
             });
         });
         
@@ -506,9 +528,33 @@ class RBMKSimulator {
         try {
             const fuelChannels = await invoke<FuelChannelData[]>('get_fuel_channels');
             this.projection2D.updateFuelChannels(fuelChannels);
+            
+            // Also update heatmap with the same data
+            this.updateHeatmap(fuelChannels);
         } catch (e) {
             // Backend not available - 2D projection will use global averages
             console.debug('[2D] Could not fetch fuel channels:', e);
+        }
+    }
+    
+    /**
+     * Update heatmap with current reactor state and fuel channel data
+     */
+    private updateHeatmap(fuelChannels?: FuelChannelData[]): void {
+        if (!this.heatmap || !this.state) return;
+        
+        // Update global state data
+        this.heatmap.updateData({
+            power_percent: this.state.power_percent,
+            avg_fuel_temp: this.state.avg_fuel_temp,
+            avg_coolant_temp: this.state.avg_coolant_temp,
+            avg_graphite_temp: this.state.avg_graphite_temp,
+            avg_coolant_void: this.state.avg_coolant_void,
+        });
+        
+        // Update per-channel data if available
+        if (fuelChannels) {
+            this.heatmap.updateFuelChannels(fuelChannels);
         }
     }
     
@@ -814,9 +860,9 @@ class RBMKSimulator {
     }
     
     /**
-     * Switch between 3D view, 2D projection, and Graphs view
+     * Switch between 3D view, 2D projection, Heatmap, and Graphs view
      */
-    private switchTab(tabId: '3d' | '2d' | 'graphs'): void {
+    private switchTab(tabId: '3d' | '2d' | 'heatmap' | 'graphs'): void {
         this.currentTab = tabId;
         
         // Update tab buttons
@@ -830,11 +876,13 @@ class RBMKSimulator {
         // Show/hide containers
         const view3dContainer = document.getElementById('view-3d-container');
         const projection2dContainer = document.getElementById('projection-2d-container');
+        const heatmapContainer = document.getElementById('heatmap-container');
         const graphsContainer = document.getElementById('graphs-container');
         
         // Hide all containers first
         view3dContainer?.classList.add('hidden');
         projection2dContainer?.classList.remove('active');
+        heatmapContainer?.classList.remove('active');
         graphsContainer?.classList.remove('active');
         
         if (tabId === '3d') {
@@ -843,6 +891,10 @@ class RBMKSimulator {
             projection2dContainer?.classList.add('active');
             // Trigger resize to ensure canvas is properly sized
             this.projection2D?.render();
+        } else if (tabId === 'heatmap') {
+            heatmapContainer?.classList.add('active');
+            // Trigger resize to ensure canvas is properly sized
+            this.heatmap?.render();
         } else {
             graphsContainer?.classList.add('active');
             // Redraw graphs when switching to graphs tab
