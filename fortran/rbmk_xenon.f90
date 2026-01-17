@@ -33,8 +33,9 @@ contains
         dI_dt = GAMMA_I * fission_rate - LAMBDA_I * iodine
         
         ! Xenon-135 production (direct + from I-135 decay) and removal (decay + burnup)
+        ! Note: SIGMA_XE is already in cm^2, no need for barn conversion
         dXe_dt = GAMMA_XE * fission_rate + LAMBDA_I * iodine - &
-                 LAMBDA_XE * xenon - SIGMA_XE * neutron_flux * xenon * 1.0d-24
+                 LAMBDA_XE * xenon - SIGMA_XE * neutron_flux * xenon
         
         ! Update concentrations (simple Euler)
         iodine_new = iodine + dI_dt * dt
@@ -66,8 +67,9 @@ contains
         
         ! Equilibrium Xe-135: dXe/dt = 0
         ! Xe_eq = (gamma_Xe * Sigma_f * phi + lambda_I * I_eq) / (lambda_Xe + sigma_Xe * phi)
+        ! Note: SIGMA_XE is already in cm^2, no need for barn conversion
         eq_xenon = (GAMMA_XE * fission_rate + LAMBDA_I * eq_iodine) / &
-                   (LAMBDA_XE + SIGMA_XE * flux * 1.0d-24)
+                   (LAMBDA_XE + SIGMA_XE * flux)
         
     end subroutine calculate_equilibrium_xenon
 

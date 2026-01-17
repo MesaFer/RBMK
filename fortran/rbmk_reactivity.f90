@@ -40,7 +40,9 @@ contains
         delta_rho_void = ALPHA_VOID * coolant_void
         
         ! Xenon poisoning (negative reactivity)
-        delta_rho_xe = -SIGMA_XE * xe_concentration * 1.0d-24  ! Convert to macroscopic
+        ! Using empirical coefficient for reactivity effect
+        ! At equilibrium ~100% power, Xe-135 ≈ 5e13 at/cm³ should give ~-3% reactivity
+        delta_rho_xe = -1.5d-16 * xe_concentration
         
         ! Graphite temperature feedback (POSITIVE in RBMK)
         delta_rho_graphite = ALPHA_GRAPHITE * (graphite_temp - REF_GRAPHITE_TEMP)
