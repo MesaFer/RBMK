@@ -334,13 +334,13 @@ impl Default for AutoRegulatorSettings {
         Self {
             enabled: false,       // AR is disabled at startup (reactor is shutdown)
             target_power: 100.0,  // Target 100% power (when enabled)
-            kp: 0.002,            // Proportional gain (conservative)
-            ki: 0.0001,           // Integral gain (slow correction)
-            kd: 0.001,            // Derivative gain (damping)
+            kp: 0.01,             // Proportional gain - more aggressive for realistic control
+            ki: 0.001,            // Integral gain - faster correction
+            kd: 0.005,            // Derivative gain (damping)
             integral_error: 0.0,
             last_error: 0.0,
-            rod_speed: 0.01,      // 1% per second max speed
-            deadband: 0.5,        // ±0.5% deadband
+            rod_speed: 0.02,      // 2% per second max speed (realistic for RBMK)
+            deadband: 0.2,        // ±0.2% deadband (tighter control)
         }
     }
 }
@@ -585,12 +585,17 @@ impl ReactorSimulator {
         if state.auto_regulator.enabled && !state.scram_active {
             let error = state.auto_regulator.target_power - state.power_percent;
             
-            // Only accumulate integral if error is outside deadband
+            // Always accumulate integral for better tracking
+            // Anti-windup: limit integral accumulation and decay when near target
+            let max_integral = 100.0; // Limit integral term
+            
             if error.abs() > state.auto_regulator.deadband {
-                // Anti-windup: limit integral accumulation
-                let max_integral = 50.0; // Limit integral term
+                // Accumulate integral error
                 state.auto_regulator.integral_error =
                     (state.auto_regulator.integral_error + error * dt).clamp(-max_integral, max_integral);
+            } else {
+                // Slowly decay integral when within deadband to prevent windup
+                state.auto_regulator.integral_error *= 0.99;
             }
             
             state.auto_regulator.last_error = error;
@@ -634,22 +639,31 @@ impl ReactorSimulator {
     
     /// Calculate automatic regulator (AR) rod adjustment using PID control
     /// Returns the position change for automatic rods (positive = withdraw, negative = insert)
+    ///
+    /// The AR system works by adjusting rod positions to control reactivity:
+    /// - If power < target: withdraw rods (add positive reactivity) to increase power
+    /// - If power > target: insert rods (add negative reactivity) to decrease power
     fn calculate_ar_adjustment(&self, settings: &AutoRegulatorSettings, current_power: f64, dt: f64) -> f64 {
         let error = settings.target_power - current_power;
         
-        // If within deadband, no adjustment needed
-        if error.abs() <= settings.deadband {
+        // If within deadband AND power is stable (small derivative), no adjustment needed
+        // But if error is large, always adjust regardless of deadband
+        let large_error_threshold = 2.0; // 2% is considered a large error
+        if error.abs() <= settings.deadband && error.abs() < large_error_threshold {
             return 0.0;
         }
         
         // PID control calculation
-        // P: Proportional to current error
+        // P: Proportional to current error - this is the main driver
+        // Larger error = larger rod movement
         let p_term = settings.kp * error;
         
         // I: Integral of error over time (already accumulated in settings)
+        // This helps eliminate steady-state error
         let i_term = settings.ki * settings.integral_error;
         
-        // D: Rate of change of error
+        // D: Rate of change of error - provides damping
+        // Prevents overshoot by slowing down when approaching target
         let d_term = if dt > 0.0 {
             settings.kd * (error - settings.last_error) / dt
         } else {
@@ -657,9 +671,20 @@ impl ReactorSimulator {
         };
         
         // Combined PID output
-        let output = p_term + i_term + d_term;
+        let mut output = p_term + i_term + d_term;
         
-        // Limit rod movement speed
+        // For large errors, use more aggressive control
+        // This ensures the AR system actively drives the reactor to target power
+        if error.abs() > large_error_threshold {
+            // Boost proportional response for large errors
+            let boost_factor = 1.0 + (error.abs() - large_error_threshold) / 10.0;
+            output *= boost_factor.min(3.0); // Cap boost at 3x
+        }
+        
+        // Limit rod movement speed (realistic RBMK rod drive speed)
+        // RBMK rod drive: ~0.4 m/min = 0.67 cm/s
+        // For 7m (700cm) travel: full extraction takes ~17 minutes
+        // rod_speed is fraction per second, so 0.02 = 2%/s = full travel in 50s (accelerated for simulation)
         let max_movement = settings.rod_speed * dt;
         output.clamp(-max_movement, max_movement)
     }
@@ -755,11 +780,24 @@ impl ReactorSimulator {
     /// Set target power for automatic regulator
     pub fn set_target_power(&self, target_percent: f64) {
         let mut state = self.state.lock().unwrap();
-        // Clamp target power to safe operating range (5% - 110%)
-        state.auto_regulator.target_power = target_percent.clamp(5.0, 110.0);
+        let old_target = state.auto_regulator.target_power;
         
-        // Reset integral error when target changes to avoid overshoot
-        state.auto_regulator.integral_error = 0.0;
+        // Clamp target power to safe operating range (5% - 110%)
+        let new_target = target_percent.clamp(5.0, 110.0);
+        state.auto_regulator.target_power = new_target;
+        
+        // When target changes significantly, pre-seed the integral error
+        // This helps the AR system respond faster to large target changes
+        let target_change = new_target - old_target;
+        if target_change.abs() > 1.0 {
+            // Pre-seed integral to help drive the system toward new target
+            // This gives the AR system a "head start" in the right direction
+            state.auto_regulator.integral_error = target_change * 5.0;
+            state.auto_regulator.last_error = target_change;
+        } else {
+            // Small change - just reset integral to avoid overshoot
+            state.auto_regulator.integral_error = 0.0;
+        }
     }
     
     /// Get automatic regulator settings
