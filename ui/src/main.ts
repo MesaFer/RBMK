@@ -9,6 +9,8 @@ import { ChannelType } from './rbmk_core_layout';
 import { ReactorGraphs } from './graphs';
 import { Reactor2DProjection, Visualization2DMode, FuelChannelData } from './reactor_2d';
 import { ReactorHeatmap, HeatmapMode } from './reactor_heatmap';
+import { CYSControlPanel, ControlMode, ControlRodData } from './cys_control';
+import { CoreChannel } from './rbmk_core_layout';
 
 // Auto regulator settings interface
 interface AutoRegulatorSettings {
@@ -62,10 +64,11 @@ class RBMKSimulator {
     private graphs: ReactorGraphs | null = null;
     private projection2D: Reactor2DProjection | null = null;
     private heatmap: ReactorHeatmap | null = null;
+    private cysControl: CYSControlPanel | null = null;
     private state: ReactorState | null = null;
     
     // Current view tab
-    private currentTab: '3d' | '2d' | 'heatmap' | 'graphs' = '3d';
+    private currentTab: '3d' | '2d' | 'heatmap' | 'cys' | 'graphs' = '3d';
     
     // Real-time simulation properties
     // Start date: April 20, 1986 at 00:00:00 (midnight)
@@ -140,6 +143,32 @@ class RBMKSimulator {
             }
         }
         
+        // Initialize CYS Control Panel (async - loads layout config from JSON)
+        const cysCanvas = document.getElementById('cysCanvas') as HTMLCanvasElement;
+        if (cysCanvas) {
+            try {
+                this.cysControl = await CYSControlPanel.create(cysCanvas);
+                
+                // Set callback for rod position changes
+                this.cysControl.setOnRodPositionChange((rodType, position, gridX, gridY) => {
+                    if (gridX !== undefined && gridY !== undefined) {
+                        // Individual rod control
+                        this.moveIndividualRod(gridX, gridY, position);
+                    } else {
+                        // Group control
+                        this.moveRodGroupByType(rodType, position);
+                    }
+                });
+                
+                // Set callback for rod selection
+                this.cysControl.setOnRodSelected((channel, rodData) => {
+                    this.handleRodSelection(channel, rodData);
+                });
+            } catch (e) {
+                console.error('Failed to create CYS control panel:', e);
+            }
+        }
+        
         // Get initial state
         await this.updateState();
         
@@ -199,41 +228,85 @@ class RBMKSimulator {
         document.getElementById('btn-scram')?.addEventListener('click', () => this.scram());
         document.getElementById('btn-reset')?.addEventListener('click', () => this.reset());
         
-        // Control rod sliders - update both visualization and backend
-        document.getElementById('manual-rods')?.addEventListener('input', (e) => {
+        // CYS Control mode buttons
+        document.querySelectorAll('.cys-mode-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const mode = (e.target as HTMLElement).dataset.mode as ControlMode;
+                document.querySelectorAll('.cys-mode-btn').forEach(b => b.classList.remove('active'));
+                (e.target as HTMLElement).classList.add('active');
+                this.cysControl?.setMode(mode);
+                
+                // Show/hide appropriate panels
+                const groupPanel = document.getElementById('group-control-panel');
+                const individualPanel = document.getElementById('individual-rod-panel');
+                if (mode === 'group') {
+                    groupPanel?.classList.add('active');
+                    individualPanel?.classList.remove('active');
+                } else {
+                    groupPanel?.classList.remove('active');
+                    individualPanel?.classList.add('active');
+                }
+            });
+        });
+        
+        // CYS Group Control sliders - use channel type for separate AR/LAR control
+        document.getElementById('rr-slider')?.addEventListener('input', (e) => {
             const value = (e.target as HTMLInputElement).value;
             const pos = parseInt(value) / 100;
-            document.getElementById('manual-rod-pos')!.textContent = `${value}%`;
-            // Update 3D visualization directly
+            document.getElementById('rr-position')!.textContent = `${value}%`;
             this.visualization?.setRodPosition('RR' as ChannelType, pos);
-            // Also update backend
-            this.moveRodGroup('manual', pos);
+            this.moveRodGroupByChannelType('RR', pos);
+            this.cysControl?.moveRodGroup('RR', pos);
         });
         
-        document.getElementById('auto-rods')?.addEventListener('input', (e) => {
+        document.getElementById('ar-slider')?.addEventListener('input', (e) => {
             const value = (e.target as HTMLInputElement).value;
             const pos = parseInt(value) / 100;
-            document.getElementById('auto-rod-pos')!.textContent = `${value}%`;
-            // Update both AR and LAR rods
+            document.getElementById('ar-position')!.textContent = `${value}%`;
             this.visualization?.setRodPosition('AR' as ChannelType, pos);
+            this.moveRodGroupByChannelType('AR', pos);
+            this.cysControl?.moveRodGroup('AR', pos);
+        });
+        
+        document.getElementById('lar-slider')?.addEventListener('input', (e) => {
+            const value = (e.target as HTMLInputElement).value;
+            const pos = parseInt(value) / 100;
+            document.getElementById('lar-position')!.textContent = `${value}%`;
             this.visualization?.setRodPosition('LAR' as ChannelType, pos);
-            this.moveRodGroup('automatic', pos);
+            this.moveRodGroupByChannelType('LAR', pos);
+            this.cysControl?.moveRodGroup('LAR', pos);
         });
         
-        document.getElementById('usp-rods')?.addEventListener('input', (e) => {
+        document.getElementById('usp-slider')?.addEventListener('input', (e) => {
             const value = (e.target as HTMLInputElement).value;
             const pos = parseInt(value) / 100;
-            document.getElementById('usp-rod-pos')!.textContent = `${value}%`;
+            document.getElementById('usp-position')!.textContent = `${value}%`;
             this.visualization?.setRodPosition('USP' as ChannelType, pos);
-            this.moveRodGroup('shortened', pos);
+            this.moveRodGroupByChannelType('USP', pos);
+            this.cysControl?.moveRodGroup('USP', pos);
         });
         
-        document.getElementById('az-rods')?.addEventListener('input', (e) => {
+        document.getElementById('az-slider')?.addEventListener('input', (e) => {
             const value = (e.target as HTMLInputElement).value;
             const pos = parseInt(value) / 100;
-            document.getElementById('az-rod-pos')!.textContent = `${value}%`;
+            document.getElementById('az-position')!.textContent = `${value}%`;
             this.visualization?.setRodPosition('AZ' as ChannelType, pos);
-            this.moveRodGroup('emergency', pos);
+            this.moveRodGroupByChannelType('AZ', pos);
+            this.cysControl?.moveRodGroup('AZ', pos);
+        });
+        
+        // Individual rod slider
+        document.getElementById('individual-rod-slider')?.addEventListener('input', (e) => {
+            const value = (e.target as HTMLInputElement).value;
+            const pos = parseInt(value) / 100;
+            document.getElementById('individual-rod-pos-value')!.textContent = `${value}%`;
+            document.getElementById('selected-rod-position')!.textContent = `${value}%`;
+            
+            // Get selected rod from CYS control panel
+            const selectedRod = this.cysControl?.getSelectedRod();
+            if (selectedRod) {
+                this.moveIndividualRod(selectedRod.gridX, selectedRod.gridY, pos);
+            }
         });
         
         // Automatic regulator controls
@@ -242,24 +315,30 @@ class RBMKSimulator {
             this.setAutoRegulatorEnabled(enabled);
             
             // Update UI to show/hide manual control of AR rods
-            const autoRodsContainer = document.getElementById('auto-rods-container');
-            const autoRodsSlider = document.getElementById('auto-rods') as HTMLInputElement;
+            const arSlider = document.getElementById('ar-slider') as HTMLInputElement;
+            const larSlider = document.getElementById('lar-slider') as HTMLInputElement;
             const arStatus = document.getElementById('ar-status');
+            const arAutoIndicator = document.getElementById('ar-auto-indicator');
+            const larAutoIndicator = document.getElementById('lar-auto-indicator');
             
             if (enabled) {
-                autoRodsContainer?.setAttribute('style', 'opacity: 0.5;');
-                autoRodsSlider?.setAttribute('disabled', 'true');
+                arSlider?.setAttribute('disabled', 'true');
+                larSlider?.setAttribute('disabled', 'true');
                 if (arStatus) {
                     arStatus.textContent = 'ENABLED';
                     arStatus.style.color = '#4ade80';
                 }
+                if (arAutoIndicator) arAutoIndicator.style.display = 'inline-block';
+                if (larAutoIndicator) larAutoIndicator.style.display = 'inline-block';
             } else {
-                autoRodsContainer?.setAttribute('style', 'opacity: 1;');
-                autoRodsSlider?.removeAttribute('disabled');
+                arSlider?.removeAttribute('disabled');
+                larSlider?.removeAttribute('disabled');
                 if (arStatus) {
                     arStatus.textContent = 'DISABLED';
                     arStatus.style.color = '#fbbf24';
                 }
+                if (arAutoIndicator) arAutoIndicator.style.display = 'none';
+                if (larAutoIndicator) larAutoIndicator.style.display = 'none';
             }
         });
         
@@ -603,6 +682,40 @@ class RBMKSimulator {
             
             // Update AR rod position display from actual control rod data
             this.updateARPositionFromRods(data.control_rods);
+            
+            // Update CYS Control panel with actual rod positions from backend
+            // This ensures AR/LAR positions are correctly displayed
+            if (this.cysControl && data.control_rods) {
+                // Map rod_type to channel_type for rods that don't have it
+                const mapRodType = (rodType: string): string => {
+                    const typeMap: { [key: string]: string } = {
+                        'Manual': 'RR',
+                        'Automatic': 'AR',  // Note: both AR and LAR have rod_type 'Automatic'
+                        'Shortened': 'USP',
+                        'Emergency': 'AZ',
+                    };
+                    return typeMap[rodType] || rodType;
+                };
+                
+                // Convert ControlRod[] to ControlRodData[] format
+                const rodData: ControlRodData[] = data.control_rods.map(rod => ({
+                    id: rod.id,
+                    grid_x: (rod as any).grid_x ?? 0,
+                    grid_y: (rod as any).grid_y ?? 0,
+                    x: rod.x,
+                    y: rod.y,
+                    position: rod.position,
+                    rod_type: rod.rod_type,
+                    channel_type: (rod as any).channel_type ?? mapRodType(rod.rod_type),
+                    worth: rod.worth,
+                }));
+                this.cysControl.updateRodPositions(rodData);
+                
+                // Also update the sliders to reflect actual AR/LAR positions when auto-regulation is enabled
+                if (this.state?.auto_regulator.enabled) {
+                    this.updateARLARSliders(data.control_rods);
+                }
+            }
         } catch (e) {
             // Use mock data
             const mockData = this.getMockData();
@@ -615,32 +728,81 @@ class RBMKSimulator {
      */
     private updateARPositionFromRods(controlRods: ControlRod[]): void {
         // Find automatic rods and calculate average position
-        const autoRods = controlRods.filter(rod => rod.rod_type === 'Automatic');
-        if (autoRods.length === 0) return;
+        // Use channel_type if available, otherwise fall back to rod_type
+        const arRods = controlRods.filter(rod =>
+            (rod as any).channel_type === 'AR' ||
+            ((rod as any).channel_type === undefined && rod.rod_type === 'Automatic')
+        );
+        const larRods = controlRods.filter(rod => (rod as any).channel_type === 'LAR');
         
-        const avgPosition = autoRods.reduce((sum, rod) => sum + rod.position, 0) / autoRods.length;
-        const positionPercent = Math.round(avgPosition * 100);
-        
-        // Update display
-        const arPositionEl = document.getElementById('ar-position-display');
-        if (arPositionEl) {
-            arPositionEl.textContent = `${positionPercent}%`;
+        // Calculate AR average
+        if (arRods.length > 0) {
+            const avgARPosition = arRods.reduce((sum, rod) => sum + rod.position, 0) / arRods.length;
+            const arPositionPercent = Math.round(avgARPosition * 100);
+            
+            // Update AR display
+            const arPositionEl = document.getElementById('ar-position-display');
+            if (arPositionEl) {
+                arPositionEl.textContent = `${arPositionPercent}%`;
+            }
         }
         
-        // Update slider (only if auto-regulation is enabled, to show current position)
-        if (this.state?.auto_regulator.enabled) {
-            const autoRodsSlider = document.getElementById('auto-rods') as HTMLInputElement;
-            const autoRodPos = document.getElementById('auto-rod-pos');
-            if (autoRodsSlider) {
-                autoRodsSlider.value = String(positionPercent);
+        // Calculate LAR average
+        if (larRods.length > 0) {
+            const avgLARPosition = larRods.reduce((sum, rod) => sum + rod.position, 0) / larRods.length;
+            const larPositionPercent = Math.round(avgLARPosition * 100);
+            
+            // Update LAR display if exists
+            const larPositionEl = document.getElementById('lar-position-display');
+            if (larPositionEl) {
+                larPositionEl.textContent = `${larPositionPercent}%`;
             }
-            if (autoRodPos) {
-                autoRodPos.textContent = `${positionPercent}%`;
+        }
+    }
+    
+    /**
+     * Update AR/LAR sliders when auto-regulation is enabled
+     * This reflects the actual rod positions controlled by the AR system
+     */
+    private updateARLARSliders(controlRods: ControlRod[]): void {
+        // Group rods by channel_type
+        const arRods = controlRods.filter(rod => (rod as any).channel_type === 'AR');
+        const larRods = controlRods.filter(rod => (rod as any).channel_type === 'LAR');
+        
+        // Update AR slider
+        if (arRods.length > 0) {
+            const avgARPosition = arRods.reduce((sum, rod) => sum + rod.position, 0) / arRods.length;
+            const arPositionPercent = Math.round(avgARPosition * 100);
+            
+            const arSlider = document.getElementById('ar-slider') as HTMLInputElement;
+            const arPosition = document.getElementById('ar-position');
+            if (arSlider) {
+                arSlider.value = String(arPositionPercent);
+            }
+            if (arPosition) {
+                arPosition.textContent = `${arPositionPercent}%`;
             }
             
             // Update 3D visualization
-            this.visualization?.setRodPosition('AR' as ChannelType, avgPosition);
-            this.visualization?.setRodPosition('LAR' as ChannelType, avgPosition);
+            this.visualization?.setRodPosition('AR' as ChannelType, avgARPosition);
+        }
+        
+        // Update LAR slider
+        if (larRods.length > 0) {
+            const avgLARPosition = larRods.reduce((sum, rod) => sum + rod.position, 0) / larRods.length;
+            const larPositionPercent = Math.round(avgLARPosition * 100);
+            
+            const larSlider = document.getElementById('lar-slider') as HTMLInputElement;
+            const larPosition = document.getElementById('lar-position');
+            if (larSlider) {
+                larSlider.value = String(larPositionPercent);
+            }
+            if (larPosition) {
+                larPosition.textContent = `${larPositionPercent}%`;
+            }
+            
+            // Update 3D visualization
+            this.visualization?.setRodPosition('LAR' as ChannelType, avgLARPosition);
         }
     }
     
@@ -786,6 +948,105 @@ class RBMKSimulator {
         }
     }
     
+    /**
+     * Move a rod group by channel type (RR, AR, LAR, USP, AZ)
+     * Uses the new backend command that distinguishes AR from LAR
+     */
+    private async moveRodGroupByChannelType(channelType: string, position: number): Promise<void> {
+        try {
+            // Use the new backend command that moves rods by channel type
+            await invoke('move_rod_group_by_channel_type', { channelType, position });
+            await this.updateState();
+            
+            // Update 3D visualization
+            this.visualization?.setRodPosition(channelType as ChannelType, position);
+        } catch (e) {
+            console.error(`Failed to move rod group ${channelType}:`, e);
+            // Fallback to old method
+            await this.moveRodGroupByType(channelType, position);
+        }
+    }
+    
+    /**
+     * Move a rod group by channel type (RR, AR, LAR, USP, AZ)
+     * Maps channel type to backend rod type (legacy method)
+     */
+    private async moveRodGroupByType(channelType: string, position: number): Promise<void> {
+        // Map channel type to backend rod type
+        const typeMap: { [key: string]: string } = {
+            'RR': 'manual',
+            'AR': 'automatic',
+            'LAR': 'automatic',
+            'USP': 'shortened',
+            'AZ': 'emergency'
+        };
+        
+        const rodType = typeMap[channelType];
+        if (rodType) {
+            await this.moveRodGroup(rodType, position);
+            
+            // Update 3D visualization
+            this.visualization?.setRodPosition(channelType as ChannelType, position);
+        }
+    }
+    
+    /**
+     * Move an individual control rod by grid position
+     * This allows precise control of specific rods in the reactor core
+     */
+    private async moveIndividualRod(gridX: number, gridY: number, position: number): Promise<void> {
+        try {
+            // Call backend to move individual rod by grid position
+            await invoke('move_control_rod_by_position', { gridX, gridY, position });
+            await this.updateState();
+            
+            // Update CYS control panel visualization
+            this.cysControl?.moveIndividualRod(gridX, gridY, position);
+            
+            // Update 3D visualization - get the rod type from CYS control
+            const selectedRod = this.cysControl?.getSelectedRod();
+            if (selectedRod) {
+                // For individual rod changes, we need to update the 3D model
+                // Since 3D model uses group positions, we need to refresh from backend
+                this.update3D();
+            }
+        } catch (e) {
+            console.error(`Failed to move rod at (${gridX}, ${gridY}):`, e);
+        }
+    }
+    
+    /**
+     * Handle rod selection from CYS control panel
+     * Updates the UI to show selected rod info and controls
+     */
+    private handleRodSelection(channel: CoreChannel, rodData?: ControlRodData): void {
+        // Show the selected rod info panel
+        const selectedRodInfo = document.getElementById('selected-rod-info');
+        const noRodSelected = document.getElementById('no-rod-selected');
+        
+        if (selectedRodInfo && noRodSelected) {
+            selectedRodInfo.style.display = 'block';
+            noRodSelected.style.display = 'none';
+            
+            // Update rod info
+            const typeEl = document.getElementById('selected-rod-type');
+            const gridEl = document.getElementById('selected-rod-grid');
+            const positionEl = document.getElementById('selected-rod-position');
+            const sliderEl = document.getElementById('individual-rod-slider') as HTMLInputElement;
+            const posValueEl = document.getElementById('individual-rod-pos-value');
+            
+            if (typeEl) typeEl.textContent = channel.type;
+            if (gridEl) gridEl.textContent = `(${channel.gridX}, ${channel.gridY})`;
+            
+            const position = rodData?.position ?? 0;
+            const positionPercent = Math.round(position * 100);
+            
+            if (positionEl) positionEl.textContent = `${positionPercent}%`;
+            if (sliderEl) sliderEl.value = String(positionPercent);
+            if (posValueEl) posValueEl.textContent = `${positionPercent}%`;
+        }
+    }
+    
     private async setTimeStep(dt: number): Promise<void> {
         try {
             await invoke('set_time_step', { dt });
@@ -860,9 +1121,9 @@ class RBMKSimulator {
     }
     
     /**
-     * Switch between 3D view, 2D projection, Heatmap, and Graphs view
+     * Switch between 3D view, 2D projection, Heatmap, CYS Control, and Graphs view
      */
-    private switchTab(tabId: '3d' | '2d' | 'heatmap' | 'graphs'): void {
+    private switchTab(tabId: '3d' | '2d' | 'heatmap' | 'cys' | 'graphs'): void {
         this.currentTab = tabId;
         
         // Update tab buttons
@@ -877,12 +1138,14 @@ class RBMKSimulator {
         const view3dContainer = document.getElementById('view-3d-container');
         const projection2dContainer = document.getElementById('projection-2d-container');
         const heatmapContainer = document.getElementById('heatmap-container');
+        const cysContainer = document.getElementById('cys-control-container');
         const graphsContainer = document.getElementById('graphs-container');
         
         // Hide all containers first
         view3dContainer?.classList.add('hidden');
         projection2dContainer?.classList.remove('active');
         heatmapContainer?.classList.remove('active');
+        cysContainer?.classList.remove('active');
         graphsContainer?.classList.remove('active');
         
         if (tabId === '3d') {
@@ -895,6 +1158,10 @@ class RBMKSimulator {
             heatmapContainer?.classList.add('active');
             // Trigger resize to ensure canvas is properly sized
             this.heatmap?.render();
+        } else if (tabId === 'cys') {
+            cysContainer?.classList.add('active');
+            // Trigger resize to ensure canvas is properly sized
+            this.cysControl?.render();
         } else {
             graphsContainer?.classList.add('active');
             // Redraw graphs when switching to graphs tab

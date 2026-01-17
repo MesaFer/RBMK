@@ -171,6 +171,8 @@ type GetConstants = unsafe extern "C" fn(
     nominal_power: *mut f64,
 );
 
+type ResetExplosionState = unsafe extern "C" fn();
+
 // ============================================================================
 // Library initialization
 // ============================================================================
@@ -684,6 +686,20 @@ pub fn get_constants() -> (f64, f64, f64) {
     }
     
     (beta_eff, neutron_lifetime, nominal_power)
+}
+
+/// Reset explosion tracking state in Fortran module
+/// This should be called when resetting the simulation
+pub fn reset_explosion_state() {
+    let lib = get_library();
+    
+    unsafe {
+        let func: Symbol<ResetExplosionState> = lib
+            .get(b"reset_explosion_state")
+            .expect("Failed to load reset_explosion_state");
+        
+        func();
+    }
 }
 
 // ============================================================================

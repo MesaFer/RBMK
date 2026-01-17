@@ -147,9 +147,34 @@ pub fn move_rod_group(
     simulator.0.get_control_rods()
 }
 
+/// Move control rods by channel type (RR, AR, LAR, USP, AZ)
+/// This allows more granular control, separating AR and LAR
+#[tauri::command(rename_all = "camelCase")]
+pub fn move_rod_group_by_channel_type(
+    simulator: State<SimulatorState>,
+    channel_type: String,
+    position: f64,
+) -> Vec<ControlRod> {
+    simulator.0.move_rod_group_by_channel_type(&channel_type, position);
+    simulator.0.get_control_rods()
+}
+
 /// Get all control rod positions
 #[tauri::command]
 pub fn get_control_rods(simulator: State<SimulatorState>) -> Vec<ControlRod> {
+    simulator.0.get_control_rods()
+}
+
+/// Move a control rod by grid position
+/// This allows individual rod control from the CYS panel
+#[tauri::command(rename_all = "camelCase")]
+pub fn move_control_rod_by_position(
+    simulator: State<SimulatorState>,
+    grid_x: i32,
+    grid_y: i32,
+    position: f64,
+) -> Vec<ControlRod> {
+    simulator.0.move_rod_by_grid_position(grid_x, grid_y, position);
     simulator.0.get_control_rods()
 }
 

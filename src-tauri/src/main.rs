@@ -28,6 +28,8 @@ fn main() {
             reset_scram,
             move_control_rod,
             move_rod_group,
+            move_rod_group_by_channel_type,
+            move_control_rod_by_position,
             get_control_rods,
             get_fuel_channels,
             set_time_step,

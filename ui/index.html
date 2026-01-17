@@ -429,6 +429,190 @@
             display: flex;
         }
         
+        /* CYS Control styles */
+        #cys-control-container {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            background: #0a0a15;
+        }
+        
+        #cys-control-container.active {
+            display: flex;
+        }
+        
+        #cys-control-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 10px 15px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+        }
+        
+        #cys-control-toolbar .toolbar-label {
+            color: #aaa;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .cys-mode-btn {
+            padding: 8px 16px;
+            background: #0f3460;
+            border: 1px solid #1a4a7a;
+            color: #aaa;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        
+        .cys-mode-btn:hover {
+            background: #1a4a7a;
+            color: white;
+        }
+        
+        .cys-mode-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: white;
+        }
+        
+        #cys-control-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        #cys-canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #cysCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        #cys-control-panel {
+            width: 350px;
+            background: #16213e;
+            border-left: 1px solid #0f3460;
+            padding: 15px;
+            overflow-y: auto;
+        }
+        
+        .rod-group-control {
+            margin-bottom: 15px;
+            padding: 12px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 5px;
+            border: 1px solid #0f3460;
+        }
+        
+        .rod-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        
+        .rod-group-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .rod-group-badge {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        
+        .rod-group-name {
+            font-size: 13px;
+            font-weight: bold;
+            color: #fff;
+        }
+        
+        .rod-group-count {
+            font-size: 11px;
+            color: #888;
+        }
+        
+        .rod-group-position {
+            font-size: 14px;
+            font-weight: bold;
+            color: #4ade80;
+        }
+        
+        .rod-slider {
+            width: 100%;
+            margin-top: 5px;
+        }
+        
+        .rod-slider-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: #666;
+            margin-top: 3px;
+        }
+        
+        .auto-indicator {
+            font-size: 10px;
+            color: #4ade80;
+            background: rgba(74, 222, 128, 0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-top: 5px;
+            display: inline-block;
+        }
+        
+        #individual-rod-panel {
+            display: none;
+        }
+        
+        #individual-rod-panel.active {
+            display: block;
+        }
+        
+        .selected-rod-info {
+            background: rgba(233, 69, 96, 0.1);
+            border: 1px solid #e94560;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .selected-rod-title {
+            font-size: 14px;
+            font-weight: bold;
+            color: #e94560;
+            margin-bottom: 10px;
+        }
+        
+        .selected-rod-detail {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }
+        
+        .selected-rod-detail .label {
+            color: #888;
+        }
+        
+        .selected-rod-detail .value {
+            color: #fff;
+            font-family: 'Consolas', monospace;
+        }
+        
         #heatmap-toolbar {
             display: flex;
             align-items: center;
@@ -689,63 +873,6 @@
             </div>
             
             <div class="panel-section">
-                <div class="panel-title">🤖 Automatic Regulator (AR/LAR)</div>
-                <div class="parameter-row" style="flex-direction: column; gap: 8px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span class="parameter-label">Auto-Regulation</span>
-                        <label style="display: flex; align-items: center; cursor: pointer;">
-                            <input type="checkbox" id="ar-enabled" style="width: 18px; height: 18px; cursor: pointer;">
-                            <span id="ar-status" style="margin-left: 8px; font-size: 11px; color: #fbbf24;">DISABLED</span>
-                        </label>
-                    </div>
-                </div>
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span>Target Power</span>
-                        <span id="target-power-value">100%</span>
-                    </div>
-                    <input type="range" id="target-power" min="5" max="110" value="100">
-                </div>
-                <div class="parameter-row">
-                    <span class="parameter-label">AR Rod Position</span>
-                    <span class="parameter-value" id="ar-position-display">0%</span>
-                </div>
-            </div>
-            
-            <div class="panel-section">
-                <div class="panel-title">Control Rods (Manual)</div>
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span>Manual Rods (RR)</span>
-                        <span id="manual-rod-pos">0%</span>
-                    </div>
-                    <input type="range" id="manual-rods" min="0" max="100" value="0">
-                </div>
-                <div class="slider-container" id="auto-rods-container">
-                    <div class="slider-label">
-                        <span>Automatic Rods (AR/LAR)</span>
-                        <span id="auto-rod-pos">0%</span>
-                    </div>
-                    <input type="range" id="auto-rods" min="0" max="100" value="0">
-                    <div style="font-size: 10px; color: #888; margin-top: 2px;">Manual control (AR disabled)</div>
-                </div>
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span>Shortened Rods (USP)</span>
-                        <span id="usp-rod-pos">0%</span>
-                    </div>
-                    <input type="range" id="usp-rods" min="0" max="100" value="0">
-                </div>
-                <div class="slider-container">
-                    <div class="slider-label">
-                        <span>Emergency Rods (AZ)</span>
-                        <span id="az-rod-pos">0%</span>
-                    </div>
-                    <input type="range" id="az-rods" min="0" max="100" value="0">
-                </div>
-            </div>
-            
-            <div class="panel-section">
                 <div class="panel-title">Simulation Control</div>
                 <div class="slider-container">
                     <div class="slider-label">
@@ -767,6 +894,7 @@
                 <button class="main-tab active" data-tab="3d">🔬 3D Model</button>
                 <button class="main-tab" data-tab="2d">📐 2D Projection</button>
                 <button class="main-tab" data-tab="heatmap">🔥 Heatmap</button>
+                <button class="main-tab" data-tab="cys">🎛️ CYS Control</button>
                 <button class="main-tab" data-tab="graphs">📊 Graphs</button>
             </div>
             
@@ -847,6 +975,179 @@
                 </div>
                 <div id="heatmap-canvas-container">
                     <canvas id="heatmapCanvas"></canvas>
+                </div>
+            </div>
+            
+            <!-- CYS Control Container -->
+            <div id="cys-control-container">
+                <div id="cys-control-toolbar">
+                    <span class="toolbar-label">Control Mode:</span>
+                    <button class="cys-mode-btn active" data-mode="group">🎚️ Group Control</button>
+                    <button class="cys-mode-btn" data-mode="individual">🎯 Individual Control</button>
+                </div>
+                <div id="cys-control-content">
+                    <div id="cys-canvas-container">
+                        <canvas id="cysCanvas"></canvas>
+                    </div>
+                    <div id="cys-control-panel">
+                        <!-- Group Control Panel -->
+                        <div id="group-control-panel">
+                            <div class="panel-title">Rod Group Control</div>
+                            
+                            <!-- Manual Rods (RR) -->
+                            <div class="rod-group-control" data-rod-type="RR">
+                                <div class="rod-group-header">
+                                    <div class="rod-group-title">
+                                        <div class="rod-group-badge" style="background: #ffffff;"></div>
+                                        <span class="rod-group-name">RR</span>
+                                        <span class="rod-group-count">146 rods</span>
+                                    </div>
+                                    <span class="rod-group-position" id="rr-position">52%</span>
+                                </div>
+                                <input type="range" class="rod-slider" id="rr-slider" min="0" max="100" value="52">
+                                <div class="rod-slider-labels">
+                                    <span>0%</span>
+                                    <span>50%</span>
+                                    <span>100%</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Automatic Rods (AR) -->
+                            <div class="rod-group-control" data-rod-type="AR">
+                                <div class="rod-group-header">
+                                    <div class="rod-group-title">
+                                        <div class="rod-group-badge" style="background: #0066ff;"></div>
+                                        <span class="rod-group-name">AR</span>
+                                        <span class="rod-group-count">8 rods</span>
+                                    </div>
+                                    <span class="rod-group-position" id="ar-position">0%</span>
+                                </div>
+                                <input type="range" class="rod-slider" id="ar-slider" min="0" max="100" value="0">
+                                <div class="rod-slider-labels">
+                                    <span>0%</span>
+                                    <span>50%</span>
+                                    <span>100%</span>
+                                </div>
+                                <div class="auto-indicator" id="ar-auto-indicator">AUTO Controlled by regulator</div>
+                            </div>
+                            
+                            <!-- Local Automatic Rods (LAR) -->
+                            <div class="rod-group-control" data-rod-type="LAR">
+                                <div class="rod-group-header">
+                                    <div class="rod-group-title">
+                                        <div class="rod-group-badge" style="background: #00b3b3;"></div>
+                                        <span class="rod-group-name">LAR</span>
+                                        <span class="rod-group-count">12 rods</span>
+                                    </div>
+                                    <span class="rod-group-position" id="lar-position">0%</span>
+                                </div>
+                                <input type="range" class="rod-slider" id="lar-slider" min="0" max="100" value="0">
+                                <div class="rod-slider-labels">
+                                    <span>0%</span>
+                                    <span>50%</span>
+                                    <span>100%</span>
+                                </div>
+                                <div class="auto-indicator" id="lar-auto-indicator">AUTO Controlled by regulator</div>
+                            </div>
+                            
+                            <!-- Shortened Absorbers (USP) -->
+                            <div class="rod-group-control" data-rod-type="USP">
+                                <div class="rod-group-header">
+                                    <div class="rod-group-title">
+                                        <div class="rod-group-badge" style="background: #ffd900;"></div>
+                                        <span class="rod-group-name">USP</span>
+                                        <span class="rod-group-count">24 rods</span>
+                                    </div>
+                                    <span class="rod-group-position" id="usp-position">56%</span>
+                                </div>
+                                <input type="range" class="rod-slider" id="usp-slider" min="0" max="100" value="56">
+                                <div class="rod-slider-labels">
+                                    <span>0%</span>
+                                    <span>50%</span>
+                                    <span>100%</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Emergency Rods (AZ) -->
+                            <div class="rod-group-control" data-rod-type="AZ">
+                                <div class="rod-group-header">
+                                    <div class="rod-group-title">
+                                        <div class="rod-group-badge" style="background: #ff0000;"></div>
+                                        <span class="rod-group-name">AZ</span>
+                                        <span class="rod-group-count">33 rods</span>
+                                    </div>
+                                    <span class="rod-group-position" id="az-position">0%</span>
+                                </div>
+                                <input type="range" class="rod-slider" id="az-slider" min="0" max="100" value="0">
+                                <div class="rod-slider-labels">
+                                    <span>0%</span>
+                                    <span>50%</span>
+                                    <span>100%</span>
+                                </div>
+                            </div>
+                            
+                            <!-- Auto Regulator Settings -->
+                            <div class="panel-section" style="margin-top: 20px;">
+                                <div class="panel-title">🤖 Auto Regulator (AR/LAR)</div>
+                                <div class="parameter-row" style="flex-direction: column; gap: 8px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="parameter-label">Auto-Regulation</span>
+                                        <label style="display: flex; align-items: center; cursor: pointer;">
+                                            <input type="checkbox" id="ar-enabled" style="width: 18px; height: 18px; cursor: pointer;">
+                                            <span id="ar-status" style="margin-left: 8px; font-size: 11px; color: #fbbf24;">DISABLED</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="slider-container">
+                                    <div class="slider-label">
+                                        <span>Target Power</span>
+                                        <span id="target-power-value">30%</span>
+                                    </div>
+                                    <input type="range" id="target-power" min="5" max="110" value="30">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Individual Control Panel -->
+                        <div id="individual-rod-panel">
+                            <div class="panel-title">Individual Rod Control</div>
+                            <p style="color: #888; font-size: 12px; margin-bottom: 15px;">
+                                Click on a control rod in the core view to select it for individual control.
+                            </p>
+                            
+                            <div class="selected-rod-info" id="selected-rod-info" style="display: none;">
+                                <div class="selected-rod-title">Selected Rod</div>
+                                <div class="selected-rod-detail">
+                                    <span class="label">Type:</span>
+                                    <span class="value" id="selected-rod-type">-</span>
+                                </div>
+                                <div class="selected-rod-detail">
+                                    <span class="label">Grid Position:</span>
+                                    <span class="value" id="selected-rod-grid">-</span>
+                                </div>
+                                <div class="selected-rod-detail">
+                                    <span class="label">Position:</span>
+                                    <span class="value" id="selected-rod-position">-</span>
+                                </div>
+                                
+                                <div class="slider-container" style="margin-top: 15px;">
+                                    <div class="slider-label">
+                                        <span>Rod Position</span>
+                                        <span id="individual-rod-pos-value">0%</span>
+                                    </div>
+                                    <input type="range" id="individual-rod-slider" min="0" max="100" value="0">
+                                </div>
+                                <div class="rod-slider-labels">
+                                    <span>Inserted (0%)</span>
+                                    <span>Withdrawn (100%)</span>
+                                </div>
+                            </div>
+                            
+                            <div id="no-rod-selected" style="color: #666; font-style: italic;">
+                                No rod selected. Click on a control rod (colored circles) in the core view.
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             

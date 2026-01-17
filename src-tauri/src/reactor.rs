@@ -82,6 +82,29 @@ fn load_fuel_channels_from_config() -> Vec<FuelChannel> {
     channels
 }
 
+/// Link control rods to fuel channels based on grid position
+/// This allows the physics simulation to use local rod positions for each channel
+fn link_control_rods_to_channels(channels: &mut Vec<FuelChannel>, rods: &[ControlRod]) {
+    // Build a lookup map: (grid_x, grid_y) -> rod index
+    let mut grid_to_rod: HashMap<(i32, i32), usize> = HashMap::new();
+    for (idx, rod) in rods.iter().enumerate() {
+        grid_to_rod.insert((rod.grid_x, rod.grid_y), idx);
+    }
+    
+    // For each channel, check if there's a control rod at the same position
+    let mut linked_count = 0;
+    for channel in channels.iter_mut() {
+        if let Some(&rod_idx) = grid_to_rod.get(&(channel.grid_x, channel.grid_y)) {
+            channel.has_control_rod = true;
+            channel.control_rod_id = Some(rod_idx);
+            channel.local_rod_position = 0.0;  // Rods start fully inserted
+            linked_count += 1;
+        }
+    }
+    
+    println!("[reactor] Linked {} control rods to fuel channels", linked_count);
+}
+
 /// Build neighbor connectivity map for 2D diffusion coupling
 /// 
 /// For each fuel channel, finds neighboring channels based on grid position.
@@ -232,6 +255,134 @@ fn create_channels_from_config(config: &LayoutConfig) -> Vec<FuelChannel> {
     fuel_channels
 }
 
+/// Load control rod positions from the OPB-82 layout config
+/// Control rod types: RR (manual), AR (automatic), LAR (local automatic), USP (shortened), AZ (emergency)
+fn load_control_rods_from_config() -> Vec<ControlRod> {
+    // Try to load from config file
+    let config_paths = [
+        "config/opb82_layout.json",
+        "../config/opb82_layout.json",
+        "ui/public/config/opb82_layout.json",
+    ];
+    
+    for path in &config_paths {
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(config) = serde_json::from_str::<LayoutConfig>(&content) {
+                let rods = create_control_rods_from_config(&config);
+                return rods;
+            }
+        }
+    }
+    
+    // Fallback: generate default circular arrangement if config not found
+    eprintln!("[reactor] Warning: Could not load control rod config, using fallback circular arrangement");
+    create_fallback_control_rods()
+}
+
+/// Create control rods from loaded config
+fn create_control_rods_from_config(config: &LayoutConfig) -> Vec<ControlRod> {
+    let mut control_rods = Vec::new();
+    let mut id = 0;
+    
+    // Rod types to load from config: RR, AR, LAR, USP, AZ
+    let rod_types = [
+        ("RR", RodType::Manual, 0.0008),      // Manual control rods
+        ("AR", RodType::Automatic, 0.0015),   // Automatic rods
+        ("LAR", RodType::Automatic, 0.0015),  // Local automatic (same type as AR)
+        ("USP", RodType::Shortened, 0.001),   // Shortened absorbers
+        ("AZ", RodType::Emergency, 0.003),    // Emergency protection
+    ];
+    
+    for (type_name, rod_type, worth) in &rod_types {
+        if let Some(cells) = config.cells.get(*type_name) {
+            for cell in cells {
+                // Convert grid position to cm from center
+                let x = (cell.grid_x as f64 - GRID_CENTER + 0.5) * GRID_SPACING_CM;
+                let y = (cell.grid_y as f64 - GRID_CENTER + 0.5) * GRID_SPACING_CM;
+                
+                control_rods.push(ControlRod {
+                    id,
+                    grid_x: cell.grid_x,
+                    grid_y: cell.grid_y,
+                    x,
+                    y,
+                    position: 0.0,  // All rods fully inserted (shutdown)
+                    rod_type: rod_type.clone(),
+                    worth: *worth,
+                    channel_type: type_name.to_string(),  // Store original channel type
+                });
+                id += 1;
+            }
+        }
+    }
+    
+    println!("[reactor] Loaded {} control rods from config", control_rods.len());
+    control_rods
+}
+
+/// Fallback: create simplified circular arrangement if config not found
+fn create_fallback_control_rods() -> Vec<ControlRod> {
+    let mut control_rods = Vec::new();
+    
+    // RBMK-1000 has 211 control rods total:
+    // - 24 AZ (emergency) rods
+    // - 24 AR/LAR (automatic regulator) rods
+    // - 24 USP (shortened absorber) rods
+    // - 139 RR (manual) rods
+    for i in 0..constants::NUM_CONTROL_RODS {
+        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (constants::NUM_CONTROL_RODS as f64);
+        let radius = constants::CORE_RADIUS_CM * 0.7;
+        
+        let x = radius * angle.cos();
+        let y = radius * angle.sin();
+        
+        // Convert to grid coordinates
+        let grid_x = ((x / GRID_SPACING_CM) + GRID_CENTER).round() as i32;
+        let grid_y = ((y / GRID_SPACING_CM) + GRID_CENTER).round() as i32;
+        
+        let (rod_type, position) = if i < 24 {
+            (RodType::Emergency, 0.0)   // AZ - fully inserted (shutdown)
+        } else if i < 48 {
+            (RodType::Automatic, 0.0)   // AR/LAR - fully inserted (shutdown)
+        } else if i < 72 {
+            (RodType::Shortened, 0.0)   // USP - fully inserted (shutdown)
+        } else {
+            (RodType::Manual, 0.0)      // RR - fully inserted (shutdown)
+        };
+        
+        let worth = match rod_type {
+            RodType::Emergency => 0.003,
+            RodType::Automatic => 0.0015,
+            RodType::Shortened => 0.001,
+            RodType::Manual => 0.0008,
+        };
+        
+        let channel_type = if i < 24 {
+            "AZ".to_string()
+        } else if i < 48 {
+            "AR".to_string()
+        } else if i < 72 {
+            "USP".to_string()
+        } else {
+            "RR".to_string()
+        };
+        
+        control_rods.push(ControlRod {
+            id: i,
+            grid_x,
+            grid_y,
+            x,
+            y,
+            position,
+            rod_type,
+            worth,
+            channel_type,
+        });
+    }
+    
+    control_rods
+}
+
 /// Fallback: create simplified circular grid if config not found
 fn create_fallback_channels() -> Vec<FuelChannel> {
     let mut fuel_channels = Vec::new();
@@ -362,11 +513,14 @@ pub struct FuelChannel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControlRod {
     pub id: usize,
-    pub x: f64,
-    pub y: f64,
+    pub grid_x: i32,         // Grid position (0-47)
+    pub grid_y: i32,         // Grid position (0-47)
+    pub x: f64,              // Position in core [cm] from center
+    pub y: f64,              // Position in core [cm] from center
     pub position: f64,       // 0.0 = fully inserted, 1.0 = fully withdrawn
     pub rod_type: RodType,
     pub worth: f64,          // [Δk/k]
+    pub channel_type: String, // Original channel type from config (RR, AR, LAR, USP, AZ)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -510,49 +664,14 @@ impl Default for ReactorSimulator {
 
 impl ReactorSimulator {
     pub fn new() -> Self {
-        let mut control_rods = Vec::new();
-        
-        // Initialize control rods with SHUTDOWN positions (all inserted)
-        // RBMK-1000 has 211 control rods total:
-        // - 24 AZ (emergency) rods
-        // - 24 AR/LAR (automatic regulator) rods
-        // - 24 USP (shortened absorber) rods
-        // - 139 RR (manual) rods
-        for i in 0..constants::NUM_CONTROL_RODS {
-            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (constants::NUM_CONTROL_RODS as f64);
-            let radius = constants::CORE_RADIUS_CM * 0.7;
-            
-            let (rod_type, position) = if i < 24 {
-                (RodType::Emergency, 0.0)   // AZ - fully inserted (shutdown)
-            } else if i < 48 {
-                (RodType::Automatic, 0.0)   // AR/LAR - fully inserted (shutdown)
-            } else if i < 72 {
-                (RodType::Shortened, 0.0)   // USP - fully inserted (shutdown)
-            } else {
-                (RodType::Manual, 0.0)      // RR - fully inserted (shutdown)
-            };
-            
-            // Rod worth varies by type - increased for proper reactivity control
-            // Total worth should be able to compensate BASE_REACTIVITY (0.08) + margin
-            let worth = match rod_type {
-                RodType::Emergency => 0.003,   // 24 rods × 0.003 = 0.072 total
-                RodType::Automatic => 0.0015,  // 24 rods × 0.0015 = 0.036 total
-                RodType::Shortened => 0.001,   // 24 rods × 0.001 = 0.024 total
-                RodType::Manual => 0.0008,     // 139 rods × 0.0008 = 0.111 total
-            };
-            
-            control_rods.push(ControlRod {
-                id: i,
-                x: radius * angle.cos(),
-                y: radius * angle.sin(),
-                position,
-                rod_type,
-                worth,
-            });
-        }
+        // Load control rods from OPB-82 layout config
+        let control_rods = load_control_rods_from_config();
         
         // Load fuel channels from OPB-82 layout config (1661 TK cells)
-        let fuel_channels = load_fuel_channels_from_config();
+        let mut fuel_channels = load_fuel_channels_from_config();
+        
+        // Link control rods to fuel channels for local reactivity effects
+        link_control_rods_to_channels(&mut fuel_channels, &control_rods);
         
         Self {
             state: Mutex::new(ReactorState::default()),
@@ -819,12 +938,108 @@ impl ReactorSimulator {
     
     /// Move all rods of a specific type
     pub fn move_rod_group(&self, rod_type: RodType, new_position: f64) {
-        let mut rods = self.control_rods.lock().unwrap();
-        for rod in rods.iter_mut() {
-            if rod.rod_type == rod_type {
-                rod.position = new_position.clamp(0.0, 1.0);
+        let clamped_position = new_position.clamp(0.0, 1.0);
+        
+        // Collect grid positions of rods being moved
+        let rod_positions: Vec<(i32, i32)> = {
+            let mut rods = self.control_rods.lock().unwrap();
+            let mut positions = Vec::new();
+            for rod in rods.iter_mut() {
+                if rod.rod_type == rod_type {
+                    rod.position = clamped_position;
+                    positions.push((rod.grid_x, rod.grid_y));
+                }
+            }
+            positions
+        };
+        
+        // Update fuel channels that have these control rods
+        if !rod_positions.is_empty() {
+            let mut channels = self.fuel_channels.lock().unwrap();
+            for channel in channels.iter_mut() {
+                if channel.has_control_rod {
+                    // Check if this channel's rod was moved
+                    if rod_positions.contains(&(channel.grid_x, channel.grid_y)) {
+                        channel.local_rod_position = clamped_position;
+                    }
+                }
             }
         }
+    }
+    
+    /// Move all rods of a specific channel type (RR, AR, LAR, USP, AZ)
+    /// This allows separate control of AR and LAR rods which both have RodType::Automatic
+    pub fn move_rod_group_by_channel_type(&self, channel_type: &str, new_position: f64) {
+        let clamped_position = new_position.clamp(0.0, 1.0);
+        
+        // Collect grid positions of rods being moved
+        let rod_positions: Vec<(i32, i32)> = {
+            let mut rods = self.control_rods.lock().unwrap();
+            let mut positions = Vec::new();
+            for rod in rods.iter_mut() {
+                if rod.channel_type == channel_type {
+                    rod.position = clamped_position;
+                    positions.push((rod.grid_x, rod.grid_y));
+                }
+            }
+            positions
+        };
+        
+        // Update fuel channels that have these control rods
+        if !rod_positions.is_empty() {
+            let mut channels = self.fuel_channels.lock().unwrap();
+            for channel in channels.iter_mut() {
+                if channel.has_control_rod {
+                    // Check if this channel's rod was moved
+                    if rod_positions.contains(&(channel.grid_x, channel.grid_y)) {
+                        channel.local_rod_position = clamped_position;
+                    }
+                }
+            }
+        }
+        
+        println!("[reactor] Moved {} rods of type {} to position {:.1}%",
+                 rod_positions.len(), channel_type, clamped_position * 100.0);
+    }
+    
+    /// Move a control rod by grid position
+    /// This allows individual rod control from the CYS panel
+    /// Returns true if a rod was found and moved, false otherwise
+    pub fn move_rod_by_grid_position(&self, grid_x: i32, grid_y: i32, new_position: f64) -> bool {
+        let clamped_position = new_position.clamp(0.0, 1.0);
+        
+        // First, update the control rod
+        let rod_found = {
+            let mut rods = self.control_rods.lock().unwrap();
+            let mut found = false;
+            for rod in rods.iter_mut() {
+                if rod.grid_x == grid_x && rod.grid_y == grid_y {
+                    rod.position = clamped_position;
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        
+        if rod_found {
+            // Also update the fuel channel's local_rod_position if it has a control rod
+            let mut channels = self.fuel_channels.lock().unwrap();
+            for channel in channels.iter_mut() {
+                if channel.grid_x == grid_x && channel.grid_y == grid_y && channel.has_control_rod {
+                    channel.local_rod_position = clamped_position;
+                    println!("[reactor] Moved rod at ({}, {}) to position {:.1}% - updated channel",
+                             grid_x, grid_y, clamped_position * 100.0);
+                    return true;
+                }
+            }
+            println!("[reactor] Moved rod at ({}, {}) to position {:.1}%",
+                     grid_x, grid_y, clamped_position * 100.0);
+            return true;
+        }
+        
+        println!("[reactor] No rod found at grid position ({}, {})", grid_x, grid_y);
+        false
     }
     
     /// Enable or disable automatic regulator (AR/LAR)
@@ -1002,8 +1217,8 @@ impl ReactorSimulator {
         }
         
         // Calculate global averages from per-channel data
-        let (fuel_temps, coolant_temps, graphite_temps, voids, powers, xenons):
-            (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) = {
+        let (fuel_temps, coolant_temps, graphite_temps, voids, powers, xenons, iodines):
+            (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) = {
             let channels = self.fuel_channels.lock().unwrap();
             let fuel_temps: Vec<f64> = channels.iter().map(|c| c.fuel_temp).collect();
             let coolant_temps: Vec<f64> = channels.iter().map(|c| c.coolant_temp).collect();
@@ -1011,7 +1226,8 @@ impl ReactorSimulator {
             let voids: Vec<f64> = channels.iter().map(|c| c.coolant_void).collect();
             let powers: Vec<f64> = channels.iter().map(|c| c.local_power).collect();
             let xenons: Vec<f64> = channels.iter().map(|c| c.xenon_135).collect();
-            (fuel_temps, coolant_temps, graphite_temps, voids, powers, xenons)
+            let iodines: Vec<f64> = channels.iter().map(|c| c.iodine_135).collect();
+            (fuel_temps, coolant_temps, graphite_temps, voids, powers, xenons, iodines)
         };
         
         let averages = fortran_ffi::calculate_global_averages(
@@ -1022,6 +1238,13 @@ impl ReactorSimulator {
             &powers,
             &xenons,
         );
+        
+        // Calculate average iodine (not in Fortran function, do it here)
+        let avg_iodine = if !iodines.is_empty() {
+            iodines.iter().sum::<f64>() / iodines.len() as f64
+        } else {
+            0.0
+        };
         
         // Update global state from averages
         {
@@ -1034,6 +1257,7 @@ impl ReactorSimulator {
             state.power_mw = averages.total_power;
             state.power_percent = averages.total_power / constants::NOMINAL_POWER_MW * 100.0;
             state.xenon_135 = averages.avg_xenon;
+            state.iodine_135 = avg_iodine;
             
             // Calculate total neutron population and precursors from channels
             let channels = self.fuel_channels.lock().unwrap();
@@ -1101,11 +1325,22 @@ impl ReactorSimulator {
                 state.alerts.push(format!("WARNING: Short reactor period: {:.1}s", period));
             }
             
-            // Check for explosion conditions
-            if !state.explosion_occurred && state.avg_fuel_temp > 2800.0 && state.avg_coolant_void > 80.0 {
-                state.explosion_occurred = true;
-                state.explosion_time = state.time;
-                state.alerts.push("*** STEAM EXPLOSION - CORE DESTRUCTION ***".to_string());
+            // Check for explosion using Fortran physics-based detection
+            // This properly tracks peak power, cumulative energy, and fuel damage
+            if !state.explosion_occurred {
+                let explosion_severity = fortran_ffi::detect_explosion(
+                    state.avg_fuel_temp,
+                    state.avg_coolant_temp,
+                    state.avg_coolant_void,
+                    state.reactivity_dollars,
+                    state.power_percent,
+                );
+                
+                if explosion_severity >= 1.0 {
+                    state.explosion_occurred = true;
+                    state.explosion_time = state.time;
+                    state.alerts.push("*** STEAM EXPLOSION - CORE DESTRUCTION ***".to_string());
+                }
             }
             
             // Update time
@@ -1123,6 +1358,9 @@ impl ReactorSimulator {
     
     /// Reset simulation to initial state (shutdown, cold, no xenon)
     pub fn reset(&self) {
+        // Reset Fortran explosion tracking state
+        fortran_ffi::reset_explosion_state();
+        
         let mut state = self.state.lock().unwrap();
         *state = ReactorState::default();
         

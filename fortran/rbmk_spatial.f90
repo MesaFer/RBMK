@@ -232,9 +232,10 @@ contains
             
             ! =====================================================
             ! Step 7: Per-channel xenon dynamics
+            ! Uses local_power (MW) to calculate fission rate density
             ! =====================================================
             call update_channel_xenon( &
-                iodine_in(i), xenon_in(i), neutron_flux_out(i), dt, &
+                iodine_in(i), xenon_in(i), local_power_out(i), dt, &
                 iodine_out(i), xenon_out(i))
             
         end do
@@ -359,39 +360,62 @@ contains
     
     ! =========================================================================
     ! Update xenon/iodine for a single channel
+    !
+    ! Uses fission rate density based on local power, not neutron flux.
+    ! At nominal power, fission rate density ≈ 5.3e11 fissions/(cm³·s)
+    !
+    ! IMPORTANT: local_power is in MW, and we need to calculate power_fraction
+    ! based on the per-channel nominal power (3200 MW / 1661 channels ≈ 1.93 MW)
     ! =========================================================================
     subroutine update_channel_xenon( &
-        iodine_in, xenon_in, neutron_flux, dt, &
+        iodine_in, xenon_in, local_power, dt, &
         iodine_out, xenon_out)
         
         real(c_double), intent(in) :: iodine_in
         real(c_double), intent(in) :: xenon_in
-        real(c_double), intent(in) :: neutron_flux
+        real(c_double), intent(in) :: local_power  ! Local channel power [MW]
         real(c_double), intent(in) :: dt
         real(c_double), intent(out) :: iodine_out
         real(c_double), intent(out) :: xenon_out
         
-        real(c_double) :: fission_rate, di_dt, dxe_dt
-        real(c_double) :: flux_scaled
+        real(c_double) :: fission_rate_density, di_dt, dxe_dt
+        real(c_double) :: flux_scaled, power_fraction
         
-        ! Scale flux to physical units (assuming neutron_flux is normalized)
-        flux_scaled = neutron_flux * 1.0d14
+        ! Nominal fission rate density at 100% power
+        ! P = E_fission * fission_rate * V
+        ! 3200 MW = 200 MeV/fission * 1.6e-13 J/MeV * fission_rate * V
+        ! For RBMK core volume ~190 m³ = 1.9e8 cm³
+        ! fission_rate_density = 3200e6 W / (3.2e-11 J/fission * 1.9e8 cm³) ≈ 5.3e11 fissions/(cm³·s)
+        real(c_double), parameter :: NOMINAL_FISSION_RATE = 5.3d11
         
-        ! Fission rate proportional to flux
-        fission_rate = SIGMA_F * flux_scaled
+        ! Per-channel nominal power (3200 MW / 1661 channels)
+        real(c_double), parameter :: CHANNEL_NOMINAL_POWER = 1.93d0  ! MW
+        
+        ! Calculate power fraction from local power
+        ! local_power is in MW, CHANNEL_NOMINAL_POWER is ~1.93 MW
+        power_fraction = local_power / CHANNEL_NOMINAL_POWER
+        power_fraction = max(0.0d0, power_fraction)
+        
+        ! Scale flux to physical units based on power fraction
+        ! At 100% power, flux is ~1e14 n/(cm²·s)
+        flux_scaled = power_fraction * 1.0d14
+        
+        ! Fission rate density proportional to power
+        fission_rate_density = NOMINAL_FISSION_RATE * power_fraction
         
         ! Iodine-135 dynamics
-        ! dI/dt = γ_I * Σ_f * φ - λ_I * I
-        di_dt = GAMMA_I * fission_rate - LAMBDA_I * iodine_in
+        ! dI/dt = γ_I * F - λ_I * I
+        ! where F is fission rate density [fissions/(cm³·s)]
+        di_dt = GAMMA_I * fission_rate_density - LAMBDA_I * iodine_in
         iodine_out = iodine_in + di_dt * dt
-        iodine_out = max(0.0d0, iodine_out)
+        iodine_out = max(0.0d0, min(1.0d17, iodine_out))
         
         ! Xenon-135 dynamics
-        ! dXe/dt = γ_Xe * Σ_f * φ + λ_I * I - λ_Xe * Xe - σ_Xe * φ * Xe
-        dxe_dt = GAMMA_XE * fission_rate + LAMBDA_I * iodine_in &
+        ! dXe/dt = γ_Xe * F + λ_I * I - λ_Xe * Xe - σ_Xe * φ * Xe
+        dxe_dt = GAMMA_XE * fission_rate_density + LAMBDA_I * iodine_in &
                - LAMBDA_XE * xenon_in - SIGMA_XE * flux_scaled * xenon_in
         xenon_out = xenon_in + dxe_dt * dt
-        xenon_out = max(0.0d0, xenon_out)
+        xenon_out = max(0.0d0, min(1.0d16, xenon_out))
         
     end subroutine update_channel_xenon
     
