@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RBMK-1000 3D Model Exporter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        h1 {
+            margin-bottom: 10px;
+            color: #00d4ff;
+            text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+        }
+        
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+        }
+        
+        .container {
+            display: flex;
+            gap: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
+            max-width: 1400px;
+        }
+        
+        .preview-container {
+            background: #0f0f1a;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+            flex: 1;
+            min-width: 600px;
+        }
+        
+        #renderCanvas {
+            width: 100%;
+            height: 500px;
+            border-radius: 5px;
+            outline: none;
+        }
+        
+        .controls {
+            background: #0f0f1a;
+            border-radius: 10px;
+            padding: 20px;
+            min-width: 300px;
+        }
+        
+        .controls h3 {
+            margin-bottom: 15px;
+            color: #00d4ff;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #aaa;
+        }
+        
+        .control-group select,
+        .control-group input[type="range"] {
+            width: 100%;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #333;
+            background: #1a1a2e;
+            color: #fff;
+        }
+        
+        .control-group input[type="range"] {
+            padding: 0;
+        }
+        
+        .range-value {
+            text-align: right;
+            color: #00d4ff;
+            font-size: 0.9em;
+        }
+        
+        button {
+            width: 100%;
+            background: #00d4ff;
+            color: #000;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            transition: all 0.2s;
+            margin-bottom: 10px;
+        }
+        
+        button:hover {
+            background: #00a8cc;
+            transform: translateY(-2px);
+        }
+        
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        button.secondary {
+            background: #333;
+            color: #fff;
+        }
+        
+        button.secondary:hover {
+            background: #444;
+        }
+        
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #1a1a2e;
+            border-left: 3px solid #00d4ff;
+        }
+        
+        .status.error {
+            border-left-color: #ff4444;
+        }
+        
+        .status.success {
+            border-left-color: #44ff44;
+        }
+        
+        .stats {
+            margin-top: 20px;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+        }
+        
+        .stat-value {
+            color: #00d4ff;
+            font-weight: bold;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+        
+        .info-box {
+            background: #1a1a2e;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 20px;
+            font-size: 0.9em;
+            color: #888;
+        }
+        
+        .info-box h4 {
+            color: #00d4ff;
+            margin-bottom: 10px;
+        }
+        
+        .info-box ul {
+            margin-left: 20px;
+        }
+        
+        .info-box li {
+            margin-bottom: 5px;
+        }
+        
+        .progress {
+            margin-top: 10px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: #00d4ff;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        
+        .section-label {
+            color: #666;
+            font-size: 0.85em;
+            margin-top: 10px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <h1>RBMK-1000 3D Model Exporter</h1>
+    <p class="subtitle">Export reactor core model with graphite blocks to GLTF/GLB/OBJ for Blender</p>
+    
+    <div class="container">
+        <div class="preview-container">
+            <canvas id="renderCanvas"></canvas>
+        </div>
+        
+        <div class="controls">
+            <h3>Export Settings</h3>
+            
+            <div class="control-group">
+                <label>Export Format</label>
+                <select id="exportFormat">
+                    <option value="glb">GLB (Binary GLTF) - Recommended for Blender</option>
+                    <option value="gltf">GLTF (JSON + Binary)</option>
+                    <option value="obj">OBJ (Wavefront)</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>Rod Position (All): <span class="range-value" id="rodPositionValue">0%</span></label>
+                <input type="range" id="rodPosition" min="0" max="100" value="0">
+            </div>
+            
+            <div class="control-group">
+                <label>Include Components</label>
+                
+                <div class="section-label">Active Zone</div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="includeGraphite" checked>
+                    <label for="includeGraphite">Graphite Blocks</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="includeFuel" checked>
+                    <label for="includeFuel">Fuel Channels (TK)</label>
+                </div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="includeRods" checked>
+                    <label for="includeRods">Control Rods (СУЗ)</label>
+                </div>
+                
+                <div class="section-label">Support Structures</div>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="includeSupport" checked>
+                    <label for="includeSupport">Support Cross + Shields + KZH + L Shell</label>
+                </div>
+            </div>
+            
+            <div class="control-group">
+                <label>Transparency Controls</label>
+                
+                <div class="section-label">E Shield (Upper)</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="eShieldOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="eShieldOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+                
+                <div class="section-label">OR Shield (Lower)</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="orShieldOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="orShieldOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+                
+                <div class="section-label">Graphite Blocks</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="graphiteOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="graphiteOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+                
+                <div class="section-label">Channel Tracts</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="tractsOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="tractsOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+                
+                <div class="section-label">Support Cross</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="supportCrossOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="supportCrossOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+                
+                <div class="section-label">KZH Cooling (Схема "КЖ")</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="kzhCoolingOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="kzhCoolingOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+                
+                <div class="section-label">L Shell (Схема "Л")</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <input type="range" id="lShellOpacity" min="0" max="100" value="100" style="flex: 1;">
+                    <span class="range-value" id="lShellOpacityValue" style="min-width: 40px;">100%</span>
+                </div>
+            </div>
+            
+            <button id="exportBtn" disabled>Export 3D Model</button>
+            <button id="resetView" class="secondary">Reset Camera View</button>
+            
+            <div class="status" id="status">Loading model...</div>
+            <div class="progress" id="progressContainer" style="display: none;">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            
+            <div class="stats">
+                <div class="stat-item">
+                    <span>Graphite Blocks</span>
+                    <span class="stat-value" id="graphiteCount">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Fuel Channels</span>
+                    <span class="stat-value" id="fuelCount">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Control Rods</span>
+                    <span class="stat-value" id="rodCount">-</span>
+                </div>
+                <div class="stat-item">
+                    <span>Total Meshes</span>
+                    <span class="stat-value" id="meshCount">-</span>
+                </div>
+            </div>
+            
+            <div class="info-box">
+                <h4>Import to Blender</h4>
+                <ul>
+                    <li>GLB: File → Import → glTF 2.0</li>
+                    <li>OBJ: File → Import → Wavefront (.obj)</li>
+                    <li>Scale: 1 unit = 1 cm</li>
+                    <li>Materials are preserved in GLTF</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Babylon.js -->
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="https://cdn.babylonjs.com/serializers/babylonjs.serializers.min.js"></script>
+    
+    <!-- RBMK Reactor Modules -->
+    <!-- First load component modules, then main -->
+    <script src="js/active_zone.js"></script>
+    <script src="js/support_cross.js"></script>
+    <script src="js/or_shield.js"></script>
+    <script src="js/e_shield.js"></script>
+    <script src="js/channel_tracts.js"></script>
+    <script src="js/kzh_cooling.js"></script>
+    <script src="js/l_shell.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
